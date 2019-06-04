@@ -1,0 +1,123 @@
+Copyright (C) 2020 MIPI Alliance
+Copyright (C) 2019--2020 Intel Corporation
+SPDX-License-Identifier: BSD-3-Clause
+
+Introduction
+------------
+
+This repository contains tools and reference libraries for converting, parsing
+and otherwise working with the CCS static data format first defined in MIPI CCS
+1.1 specification [1].
+
+
+Noteworthy files in this repository
+-----------------------------------
+
+LICENSE
+
+	The three-clause BSD license under which the CCS tools are licensed.
+
+ccs-static-data-yaml-format.txt
+
+	Specification of the CCS static data YAML-based format.
+
+ccs-yaml-to-bin
+
+	A Perl script for converting the YAML-based CCS static data to the
+	binary format that can be parsed by the parser library.
+
+ccs-data.c, ccs-data.h
+
+	The CCS static data reference parser.
+
+ccs-bin-to-yaml.c
+
+	An example of a program that uses the ccs-data reference parser.
+	Also a C program that converts binary CCS static data into
+	YAML-based format.
+
+ccs-regs.txt
+
+	Definitions of CCS standard registers.
+
+mk-regs, mk-licenses
+
+	Scripts for producing C header and source code files from ccs-regs.txt
+	and files in "licenses" directory.
+
+licenses
+
+	The directory where the CCS static data licenses are maintained.
+
+examples
+
+	Examples of CCS static data files in YAML format.
+
+
+Requirements
+------------
+
+- GCC 4.1 or later
+
+- GNU make
+
+- GNU binutils
+
+- Perl 5.24.1 or later (older versions probably work as well) and Digest::CRC,
+  Scalar::Util and YAML::Tiny Perl modules
+
+- shunit2 (for tests)
+
+In e.g. Debian GNU/Linux these can be installed using the following command as
+root:
+
+	# apt-get install make binutils gcc libyaml-tiny-perl \
+	  libdigest-crc-perl shunit2
+
+
+Compilation
+-----------
+
+Run
+
+	$ make
+
+in order to compile the CCS tools.
+
+
+Usage
+-----
+
+Use "--help" option on ccs-bin-to-yaml and ccs-yaml-to-bin to see detailed
+usage instructions.
+
+Both programs are currently run from the workspace top directory.
+
+
+Examples
+--------
+
+Convert YAML based CCS sensor specific static data for use as a sensor static
+data file:
+
+	$ ./ccs-yaml-to-bin -s -o ccs-sensor-VVVV-DDDD-RRRR.fw \
+		ccs-sensor-VVVV-DDDD-vvvv.yaml
+
+Convert YAML based CCS module specific static data for use as a module static
+data file:
+
+	$ ./ccs-yaml-to-bin -m -o ccs-module-VVVV-DDDD-RRRR.fw
+		ccs-module-VVVV-DDDD-vvvv.yaml
+
+In both of the above examples,
+
+	VVVV		Vendor ID
+	DDDD		Device ID
+	vvvv		Version number
+
+
+References
+----------
+
+[1] MIPI Camera Command Set.
+    <URL:https://mipi.org/specifications/camera-command-set>

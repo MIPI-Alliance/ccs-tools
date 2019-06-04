@@ -1,0 +1,339 @@
+Copyright (C) 2020 MIPI Alliance
+Copyright (C) 2019--2020 Intel Corporation
+SPDX-License-Identifier: BSD-3-Clause
+
+YAML-based CCS static data format
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This document describes the YAML-based CCS static data format [1]. It is
+intended to be the human-editable form of CCS static data. It can be also easily
+produced by other programs. The format can be converted to binary for parsing by
+the CCS static data parser.
+
+This document expects the reader to be familiar with YAML [2].
+
+
+Format
+======
+
+The file is split into sections by the mapping keys. The value (in YAML context;
+this may be e.g. a mapping) of each such key describes a particular CCS static
+data block. Only one section of each kind may be present in a single YAML
+document. No more than a single YAML document per file is supported.
+
+
+Terminology
+===========
+
+Mapping		A key--value pair. The value may be a mapping, a sequence or a
+		scalar.
+Sequence	A series of values (of scalars, mappings or sequences).
+Scalar		Single value, e.g. a string or a number.
+
+
+Sections
+========
+
+
+data-version
+------------
+
+CCS static data version. Valid keys are:
+
+	version-major
+
+		CCS static data file version major number
+
+	version-minor
+
+		CCS static data file version minor number
+
+	date-year
+
+		Year part of the date of the file
+
+	date-month
+
+		Month part of the date of the file
+
+	date-day
+
+		Day part of the date of the file
+
+
+license
+-------
+
+The license under which the entire file is distributed. This section is
+MANDATORY IF THE CCS STATIC DATA IS DISTRIBUTED AS A FILE. Valid keys are:
+
+	filename
+
+		The name of the file where to find the license.
+
+The license files are located under licenses sub-directory.
+
+
+sensor-read-only-regs and module-read-only-regs
+-----------------------------------------------
+
+Sensor and module specific read-only registers. The section consists of a YAML
+sequence where each entry conforms to one of the following forms:
+
+	<register name>			<register value>
+	<register address>		<register value>
+
+For registers specified by address, the values shall always be in
+hexadecimal notation. For registers specified by name, also decimal
+notation is supported. Enumerated text based values are also supported on
+registers with an enumerated list of possible values.
+
+Register arrays can be accessed using the register name and the indices
+separated by comma in parentheses:
+
+	<register name>(arg, ...)	<register value>
+
+Specific fields of standard registers may be also assigned separately. The
+register fields may be assigned as follows. Registers with multiple fields
+may be assigned one field at a time --- logical or operation is performed
+on the values set separately. Like with registers, enumerated field values
+are also supported.
+
+	<register name>.<field name>	<field value>
+	<register name>(arg, ...).<field name> <field value>
+
+Bit names are also supported. Bits for a register can be set by using the
+bit names and or operator (|) as follows:
+
+	<register name>			<bit name | ...>
+	<register address>		<bit name | ...>
+
+The register and field names can be found in ccs-regs.txt file. The name
+used in the file may differ from the name used in the CCS specification.
+This is the case for especially long names. Lower case is preferred.
+
+The order of the registers in the sequence does not matter. The sequence may be
+re-ordered before converting it to binary.
+
+Only standard CCS registers are allowed in these sections.
+
+
+sensor-manufacturer-regs and module-manufacturer-regs
+-----------------------------------------------------
+
+Manufacturer specific registers for the sensor and the module. The section
+consists of a YAML sequence where each entry conforms to the following form:
+
+	<register address> <register value>
+
+For registers specified by address, the values shall always be in hexadecimal
+notation. For registers specified by name, also decimal notation is supported.
+
+There is no file format based limit for the length of the register value.
+Only manufacturer specific registers are allowed in this section.
+
+
+sorted-sensor-manufacturer-regs and sorted-module-manufacturer-regs
+-------------------------------------------------------------------
+
+These two sections are just like sensor-manufacturer-regs and
+module-manufacturer-regs, but the contents may be sorted to make it fit in a
+smaller space. Do not use these if the register writes have side effects, i.e.
+their order makes a difference.
+
+Only one sensor and module manufacturer specific register section may exist in a
+single file.
+
+
+sensor-rule-based-block and module-rule-based-block
+---------------------------------------------------
+
+Sensor and module rule based blocks. The block consists of a sequence of
+mappings, each of which may have the following keys. The order of the keys in a
+mapping is not relevant.
+
+	condition
+
+		The if rule record which the other records in the sequence entry
+		depend on. The format of the value is a sequence of scalars in
+		either of the two form each:
+
+			<register name> <register value> [mask]
+			<register address> <register value> [mask]
+
+		For registers specified by address, the values shall always be
+		in hexadecimal notation. For registers specified by name, also
+		decimal notation is supported.
+
+		The default mask of 0xff is used in case the mask is omitted.
+
+		Refer to ccs-regs.txt for the register names.
+
+	read-only-regs
+	manufacturer-regs
+	sorted-manufacturer-regs
+
+		Refer to the documentation of the relevant section. As the rule
+		based block is already specific to either the sensor or the
+		module, no such difference is made inside the rule based blocks.
+
+	frame-format-descriptor
+
+		A frame-format-descriptor consists of two mappings, with keys
+		"columns" and "rows" that contain the row and column frame
+		format descriptor sequences, respectively.
+
+		Both row and column descriptors are of the following form:
+
+			<data type> <value>
+			<data type code> <value>
+
+		The following pixel codes are supported:
+
+			embedded
+			dummy
+			black
+			dark
+			visible
+			manufacturer-specific-0
+			manufacturer-specific-1
+			manufacturer-specific-2
+			manufacturer-specific-3
+			manufacturer-specific-4
+			manufacturer-specific-5
+			manufacturer-specific-6
+			top-OB
+			bottom-OB
+			left-OB
+			right-OB
+			top-left-OB
+			top-right-OB
+			bottom-left-OB
+			bottom-right-OB
+			total
+			top-PDAF
+			bottom-PDAF
+			left-PDAF
+			right-PDAF
+			top-left-PDAF
+			top-right-PDAF
+			bottom-left-PDAF
+			bottom-right-PDAF
+			separated-PDAF
+			original-order-PDAF
+			vendor-PDAF
+
+	pdaf-readout
+
+		A PDAF readout record contains the following mappings:
+
+		pdaf-readout-info
+
+			Tell the order of PDAF pixels read out by the sensor.
+
+			Valid string values are:
+
+				original-order
+				separate-line-order
+				separate-types-separate-lines
+
+		frame-format-descriptor
+
+			Frame format descriptor for PDAF. The format is the same
+			as in the frame-format-descriptor record.
+
+
+sensor-pdaf-pixel-location-block and module-pixel-pdaf-location-block
+---------------------------------------------------------------------
+
+	main-offset-x
+	main-offset-y
+
+		Main X and Y offsets from addr_start_x and addr_start_y
+
+	global-pdaf-type
+
+		The possible string values are:
+
+			separated
+			side-by-side
+			multiple-side-by-side
+
+	block-width
+	block-height
+
+		Width and height of a PDAF block, in pixels.
+
+	block-desc-groups
+
+		A series of PDAF block descriptor groups, each with the
+		following keys:
+
+		repeat-y
+
+			The number of times the block is repeated vertically.
+
+		block-descs
+
+			A series of PDAF block descriptors, each with the
+			following keys:
+
+			block-type-id
+
+				The pixel descriptor group ID, i.e. the index of
+				the pixel descriptor groups within the
+				"pixel-desc-groups" sequence below.
+
+			repeat-x
+
+				The number of times the block is repeated
+				horizontally.
+
+	pixel-desc-groups
+
+		A sequence of PDAF pixel descriptor groups, each with the
+		following content:
+
+			A sequence of PDAF pixel descriptors, each with the
+			following keys:
+
+			pixel-type
+
+				The following string values are allowed:
+
+				left-separated
+				right-separated
+				top-separated
+				bottom-separated
+				left-side-by-side
+				right-side-by-side
+				top-side-by-side
+				bottom-side-by-side
+				top-left
+				top-right
+				bottom-left
+				bottom-right
+
+			offset-x
+			offset-y
+
+				X and Y offsets of the pixel within a block
+				descriptor.
+
+
+end
+---
+
+The end section. Adding this section to the CCS static data file puts the end
+section to the binary, including the CRC. While the location of the end section
+in a file has no functional difference, it is preferred to put it at the end of
+the file.
+
+
+References
+==========
+
+[1] MIPI Camera Command Set.
+    <URL:https://mipi.org/specifications/camera-command-set>
+
+[2] YAML Ain't Markup Language. <URL:https://yaml.org/>
