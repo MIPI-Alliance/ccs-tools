@@ -1,0 +1,991 @@
+#!/usr/bin/perl -w
+#
+# Copyright (C) 2020 MIPI Alliance
+# Copyright (C) 2019--2020 Intel Corporation
+# SPDX-License-Identifier: BSD-3-Clause
+
+use Digest::CRC;
+use Fcntl;
+use Getopt::Long;
+use Scalar::Util qw/reftype/;
+use YAML::Tiny;
+
+my ($filenames, $output);
+
+my ($is_sensor_file, $is_module_file, $is_eeprom) = (0) x 3;
+my ($break_len, $break_len_count, $break_inject, $break_inject_count) = (0) x 4;
+my $verbose;
+my $help;
+
+GetOptions("output|o=s" => \$output,
+	   "sensor|s" => \$is_sensor_file,
+	   "module|m" => \$is_module_file,
+	   "eeprom|e" => \$is_eeprom,
+	   "verbose|v" => \$verbose,
+	   "break-len=i" => \$break_len,
+	   "break-len-count=i" => \$break_len_count,
+	   "break-inject=i" => \$break_inject,
+	   "break-inject-count=i" => \$break_inject_count,
+	   "help|h" => \$help) or die "cannot parse options";
+
+if ($help) {
+	print <<EOH
+$0 - convert YAML based CCS static data into a binary
+
+usage: $0 [-e|--eeprom] [-m|--module] [-s|--sensor] [-h|--help]
+		-o|--output output.bin input [input2] ...
+
+	-e, --eeprom	EEPROM output
+	-m, --module	Module file output
+	-s, --sensor	Sensor file output
+	-o, --output	Output file name
+	-v, --verbose	Verbose output
+	-h, --help	Display this help text
+EOH
+	  ;
+	exit 0;
+}
+
+my @files = @ARGV;
+
+die "must specify either -s, -m or -e"
+	unless $is_sensor_file + $is_module_file + $is_eeprom == 1;
+
+sub to_bool($) {
+	return 1 if $_[0] =~ /(on|enable|true|1)/i;
+	return 0 if $_[0] =~ /(off|disable|false|0)/i;
+	die "don't know if \"$_[0]\" is true or false";
+}
+
+sub to_8(@) {
+	return map { die (join ": ", (caller)) if ! defined $_; $_ & 0xff; } @_;
+}
+
+sub to_16(@) {
+	return map { (to_8($_ >> 8), to_8($_)) } @_;
+}
+
+sub hex_to_char($) {
+	my $in_str = $_[0];
+	my $str;
+
+	$in_str =~ s/^0x//;
+
+	$in_str = "0" . $in_str if length $in_str & 1;
+
+	while ($in_str =~ s/..//) {
+		$str .= sprintf "%c", hex $&;
+	}
+
+	return $str;
+}
+
+sub arr_to_char(@) {
+	return join "", map { sprintf "%c", $_ } @_;
+}
+
+# Return a value of a key from href and delete the key
+sub ret_rm($$) {
+	my ($href, $key) = @_;
+	my $value;
+
+	die "cannot find key $key" if ! exists $href->{$key};
+
+	$value = $href->{$key};
+	delete $href->{$key};
+
+	return $value;
+}
+
+sub shrink(@) {
+	return map {
+		s/\r?\n?$//;
+		s/^[ \t]*//;
+		s/[ \t]*$//;
+		s/([^\\]|^)#.*//;
+		s/\\\\/\\/g;
+		$_;
+	} @_;
+}
+
+my %ccs_regs;
+my %ccs_reg_addrs;
+
+my $last_name;
+my ($field_mask, $field_lsb, $field_msb, $field_name);
+
+sub elem_size(@) {
+	my @flags = @_;
+
+	return 2 if grep /^16$/, @flags;
+	return 4 if grep /^32$/, @flags;
+	return 1;
+}
+
+open(REGS, "<:utf8", "ccs-regs.txt") or die "cannot open ccs-regs.txt";
+while (<REGS>) {
+	my ($line) = shrink($_);
+
+	next unless $line =~ /^\S/;
+
+	my @F = map { lc } split /\t+/, $line;
+
+	if ($line =~ /^\s*-\s*b/) {
+		$ccs_regs{$last_name}{bitdef}{$F[1]} = $F[2];
+
+		next;
+	} elsif ($line =~ /^\s*-\s*e/) {
+		my %h = (
+			 "value" => $F[2],
+			 "mask" => $field_mask,
+			 "shift" => $field_lsb
+			);
+		if (defined $field_name) {
+			$ccs_regs{$last_name}{field}{$field_name}{enum}{$F[1]} = \%h;
+		} else {
+			$ccs_regs{$last_name}{enum}{$F[1]} = \%h;
+		}
+
+		next;
+	} elsif ($line =~ s/-\s*l\s*//) {
+		my ($arg, $min, $max, $elsize, @discontig) = split /\s+/, $line;
+		my $reg = \%{$ccs_regs{$last_name}};
+		#print "" . (reftype $reg) . (reftype %ccs_regs{$last_name}) . "\n";
+		$reg->{argparams} = {} if ! defined $reg->{argparams};
+		my $ap = $reg->{argparams};
+
+		$ap->{$arg}{min} = $min;
+		$ap->{$arg}{max} = $max;
+		$ap->{$arg}{elsize} = $elsize;
+		$ap->{$arg}{discontig} = \@discontig;
+
+		next;
+	} elsif ($line =~ /^\s*-\s*f/) {
+		($field_msb, $field_lsb, $field_name) = reverse @F;
+
+		undef $field_name if $field_name eq "";
+
+		if (defined $field_name) {
+			$ccs_regs{$last_name}{field}{$field_name}{lsb} = $field_lsb;
+			$ccs_regs{$last_name}{field}{$field_name}{msb} = $field_msb;
+		} else {
+			$ccs_regs{$last_name}{lsb} = $field_lsb;
+			$ccs_regs{$last_name}{msb} = $field_msb;
+		}
+
+		$field_mask = (1 << ($field_msb + 1)) - 1 - ((1 << $field_lsb) - 1);
+
+		next;
+	} elsif ($F[0] !~ /\(/) {
+		my ($name, $addr, @flags) = @F;
+
+		$last_name = $name;
+		$ccs_regs{$name}{addr} = $addr;
+		$ccs_regs{$name}{bits} = elem_size(@flags) * 8;
+		$ccs_reg_addrs{$addr} = ${ccs_regs{$name}};
+		$ccs_regs{$name}{lsb} = 0;
+		$ccs_regs{$name}{msb} = $ccs_regs{$name}{bits} - 1;
+		$ccs_regs{$name}{name} = $name;
+	} else {
+		my ($name, $args) = split /\(/, shift @F;
+
+		$args =~ s/\).*//;
+
+		$last_name = $name;
+		$ccs_regs{$name}{addr} = shift @F;
+		$ccs_regs{$name}{args} = [ split /,\s*/, $args ];
+		$ccs_regs{$name}{flags} = \@F if defined $F[0];
+
+		$ccs_regs{$name}{size} =
+		  elem_size(@{$ccs_regs{$name}{flags}});
+		$ccs_regs{$name}{bits} = $ccs_regs{$name}{size} * 8;
+		$ccs_regs{$name}{name} = $name;
+	}
+
+	$field_lsb = 0;
+	$field_msb = $ccs_regs{$last_name}{bits};
+	$field_mask = (1 << $field_msb) - 1;
+	undef $field_name;
+}
+close(REGS);
+
+sub unhex($) {
+	die "$_[0]: " . (join ": ", caller)
+	  unless defined $_[0] && is_numeric($_[0]);
+
+	return hex $_[0] if $_[0] =~ /^0x/i;
+	return $_[0];
+}
+
+sub reg_info($) {
+	my ($reg) = lc shift @_;
+
+	return $ccs_reg_addrs{$reg} if $reg =~ /^0x/ && exists $ccs_reg_addrs{$reg};
+	return $ccs_regs{$reg} if exists $ccs_regs{$reg};
+
+	if ($reg =~ /\(/) {
+		my ($name, $__args) = split /\s*[\(\)]\s*/, $reg;
+		my @args = split /\s*,\s*/, $__args;
+
+		my %reg_info = %{$ccs_regs{$name}};
+
+		die "unknown register $name" if ! keys %reg_info;
+
+		my $addr = unhex $reg_info{addr};
+
+		my @anames = @{$reg_info{args}};
+		for my $arg (@args) {
+			my $aname = shift @anames;
+			my $par = \%{$reg_info{argparams}->{$aname}};
+
+			die "$arg too big (max is " . $par->{max} . ")"
+			  if $arg > $par->{max};
+			die "$arg too small (min is " . $par->{min} . ")"
+			  if $arg < $par->{min};
+
+			if (@{$par->{discontig}}) {
+				my ($base, $offset) = split /,/, $par->{discontig}->[0];
+
+				if ($arg >= $base) {
+					$arg -= $base;
+					$addr += unhex $offset;
+				}
+			}
+
+			#print $addr . " " .$par->{elsize} . " " . (unhex $arg)."\n";
+
+			$addr += (unhex $par->{elsize}) * unhex $arg;
+		}
+
+		$reg_info{addr} = bit_hex_value($addr, 16);
+
+		return \%reg_info;
+	}
+
+	return undef;
+}
+
+sub length_specifier($) {
+	my ($len) = @_;
+
+	if (!--$break_len_count) {
+		$len += $break_len;
+		$len = 0 if $len < 0;
+	}
+
+	return sprintf "%c", to_8($len)
+	  if $len < 1 << 6;
+
+	return sprintf "%c%c", (1 << 6) | ($len >> 8) & 0xff, to_8($len)
+	  if $len < 1 << 14;
+
+	return sprintf "%c%c%c", (2 << 6) | ($len >> 16) & 0xff, to_16($len)
+	  if $len < 1 << 22;
+
+	die "$len is too long";
+}
+
+sub handle_data_version($$) {
+	my ($block, $href) = @_;
+
+	return arr_to_char(
+			   (to_16
+			    ret_rm($href, "version-major"),
+			    ret_rm($href, "version-minor"),
+			    ret_rm($href, "date-year")),
+			   (to_8
+			    ret_rm($href, "date-month"),
+			    ret_rm($href, "date-day")));
+}
+
+sub handle_license($$) {
+	my ($block, $href) = @_;
+	my $filename = ret_rm($href, "filename");
+
+	open(LICENSE, "<:raw", "licenses/$filename") or
+		die "can't open licenses/$filename";
+
+	my $data = join "", <LICENSE> or die "cannot read the license";
+
+	close(LICENSE);
+
+	return $data;
+}
+
+my $crc;
+
+sub handle_end($$) {
+	my ($block, $href) = @_;
+
+	$crc = Digest::CRC->new(type => "crc32");
+
+	return undef;
+}
+
+sub bit_hex_value($$) {
+	my ($value, $bits) = @_;
+
+	return sprintf "%#0*x", 2 + ($bits >> 2), unhex $value;
+}
+
+sub is_numeric($) {
+	my $i = $_[0];
+
+	return $i =~ /^0x[0-9a-f]+$/i || $i =~ /^[0-9]+$/;
+}
+
+sub calculate_value($$$) {
+	my ($reg, $value, $fieldname) = @_;
+
+	# For a non-standard register, just return the specified value
+	return $value unless defined $reg;
+
+	# Handle register bits
+	if ((defined $fieldname && exists $reg->{bitdef}{$fieldname}) ||
+	    $value =~ /\|/) {
+		my $val = 0;
+
+		foreach my $b (split /\s*\|\s*/, $value) {
+			die "unknown bit $b in register $reg->{addr}"
+			  if ! defined $reg->{bitdef}{$b};
+
+			$val |= 1 << $reg->{bitdef}{$b};
+		}
+
+		return bit_hex_value($val, $reg->{bits});
+	}
+
+	# Handle cases where the register field is specified
+	if (defined $fieldname) {
+
+		die "field $fieldname not found in $reg->{name}"
+		  if ! exists $reg->{field}{$fieldname};
+
+		my $field = $reg->{field}{$fieldname};
+
+		# Field value specified in numeric form
+		return bit_hex_value($value << $field->{lsb}, $reg->{bits})
+		  if is_numeric($value);
+
+		die "undefined enum value $value"
+		  unless defined $field->{enum}{$value};
+
+		# It's an enum
+		return bit_hex_value($field->{enum}{$value}{value} << $field->{lsb},
+				     $reg->{bits});
+	}
+
+	# Check for an enumerated register value
+	my $enum = $reg->{enum}{$value};
+	return bit_hex_value(unhex($enum->{value}) << $enum->{shift},
+			     $reg->{bits})
+	  if defined $enum;
+
+	# Numeric value
+	return bit_hex_value(unhex($value), $reg->{bits});
+}
+
+sub validate_reg($) {
+	my $reg_addr = $_[0];
+
+	die "can't handle $$reg_addr"
+	  if $$reg_addr !~ s/^0x//i || $$reg_addr !~ /^[0-9a-f]*$/i;
+
+	die "address 0x$$reg_addr not 16 bits"
+	  if $$reg_addr !~ /^[0-9a-f]{4}$/i;
+}
+
+my $FIRST_MSR = 0x3000;
+
+sub handle_regs($$) {
+	my ($block, $aref) = @_;
+	my @regs;
+
+	while ($#{$aref} != -1) {
+		my $func;
+
+		$func = 1 if $aref->[0] =~ s/\(\K(\S*)\s+(\S*)(?=\))/$1$2/g;
+		my ($addr, $value) = shrink(split(/[ \t]+/, lc $aref->[0], 2));
+		my $field;
+		($addr, $field) = split /\./, $addr, 2 if $addr =~ /\./;
+		my $reg = reg_info($addr);
+		my $is_dec;
+
+		my ($reg_addr, $reg_bits) = defined $reg ?
+		  ($reg->{addr}, $reg->{bits}) : ($addr, 8);
+
+		validate_reg(\$reg_addr);
+
+		$value = calculate_value($reg, $value, $field);
+		$value =~ s/^0x//;
+
+		die "no MSR registers (0x$reg_addr) allowed in $block->{name}"
+		  if (hex $reg_addr) + length hex_to_char($value) > $FIRST_MSR && $block->{"std"};
+		die "no standard registers (0x$reg_addr) allowed in $block->{name}"
+		  if hex $reg_addr <= $FIRST_MSR && $block->{"msr"};
+
+		die "value $value does not fit the register $reg_addr of $reg_bits bits"
+		  if defined $reg && hex $value >= 1 << $reg_bits;
+
+		my @new = (hex $reg_addr, hex_to_char $value);
+		push @regs, \@new;
+		shift @$aref;
+	}
+
+	print "\t" . ($block->{sorted} ? "" : "not ") . "rearranging list\n"
+	  if $verbose;
+
+	if ($block->{sorted}) {
+		@regs = sort { $a->[0] <=> $b->[0] } @regs;
+
+		my $i = 0;
+
+		while ($i < $#regs) {
+			unless ($regs[$i]->[0] eq $regs[$i + 1]->[0]) {
+				$i++;
+				next;
+			}
+
+			$regs[$i]->[1] |= $regs[$i + 1]->[1];
+			splice @regs, $i + 1, 1;
+		}
+	}
+
+	my $prev_entry;
+	my $i = 0;
+	foreach my $entry (@regs) {
+		my ($reg, $val) = @$entry;
+		my $len = length $val;
+
+		if (defined $prev_entry) {
+			#print "$prev_entry->[0] $entry->[0]\n";
+			if ($prev_entry->[0] + length($prev_entry->[1])
+			    == $reg) {
+				$prev_entry->[1] .= $val;
+				delete @$entry[0..1];
+				next;
+			} elsif ($reg < $prev_entry->[0]
+					+ length($prev_entry->[1])
+				 && $reg >= $prev_entry->[0]) {
+				die "invalid reg 0x$reg";
+			}
+		}
+		$prev_entry = $entry;
+		$i++;
+	}
+
+	my $addr = 0;
+	my $data = "";
+	foreach my $entry (@regs) {
+		my ($reg, $val) = @$entry;
+
+		next if ! defined $val || ! defined $reg;
+
+		do {
+			my ($len, $chunk);
+			if ($reg >= $addr && $reg < $addr + 8 &&
+				length $val <= 8) {
+				$chunk = substr $val, 0, 8, "";
+				$len = length $chunk;
+				$data .= sprintf "%c",
+					(($len - 1) << 3) | ($reg - $addr);
+				#printf "len $len %2.2x\n", (($len - 1) << 3) | ($reg - $addr);
+			} elsif ($reg >= $addr && $reg < $addr + 512) {
+				$chunk = substr $val, 0, 32, "";
+				$len = length $chunk;
+				my $delta = $reg - $addr;
+				$data .= sprintf "%c%c",
+					to_8((1 << 6) | (($len - 1) << 1) | ($delta >> 8), $delta);
+				#printf "len2 $len %2.2x%2.2x\n",
+				#	to_8((1 << 6) | ($delta >> 8), $delta);
+			} else {
+				$chunk = substr $val, 0, 64, "";
+				$len = length $chunk;
+				$data .= sprintf "%c%c%c",
+					(2 << 6) | ($len - 1), to_16($reg);
+				#print "len3 $len\n";
+			}
+			$data .= $chunk;
+			$addr = $reg + $len;
+		} while $val ne "";
+	}
+
+	return $data;
+}
+
+# id:		numeric block ID
+# func:		handler function
+# h:		use hashref (instead of arrayref)
+# sensor-only:	sensor-only data
+# module-only:	module-only data
+# eeprom-req:	required on eeprom
+# file-req:	required on file
+# sorted:	sorted (e.g. registers)
+# std:		whether a block requires standard CCS registers
+my %blocks = (
+	"dummy" =>
+		{ "id" => 1, },
+	"data-version" =>
+		{ "id" => 2, "func" => \&handle_data_version, "file-req" => 1, "h" => 1 },
+	"sensor-read-only-regs" =>
+		{ "id" => 3, "func" => \&handle_regs, "sensor-only" => 1, "sorted" => 1, "std" => 1 },
+	"module-read-only-regs" =>
+		{ "id" => 4, "func" => \&handle_regs, "module-only" => 1, "sorted" => 1, "std" => 1 },
+	"sensor-manufacturer-regs" =>
+		{ "id" => 5, "func" => \&handle_regs, "sensor-only" => 1, "msr" => 1 },
+	"sorted-sensor-manufacturer-regs" =>
+		{ "id" => 5, "func" => \&handle_regs, "sensor-only" => 1, "msr" => 1, "sorted" => 1 },
+	"module-manufacturer-regs" =>
+		{ "id" => 6, "func" => \&handle_regs, "module-only" => 1, "msr" => 1 },
+	"sorted-module-manufacturer-regs" =>
+		{ "id" => 6, "func" => \&handle_regs, "module-only" => 1, "msr" => 1, "sorted" => 1 },
+	"sensor-rule-based-block" =>
+		{ "id" => 32, "func" => \&handle_sensor_rule_block, "sensor-only" => 1 },
+	"module-rule-based-block" =>
+		{ "id" => 33, "func" => \&handle_module_rule_block, "module-only" => 1 },
+	"sensor-pdaf-pixel-location-block" =>
+	        { "id" => 36, "func" => \&handle_pdaf_block, "sensor-only" => 1, "h" => 1 },
+	"module-pdaf-pixel-location-block" =>
+	        { "id" => 37, "func" => \&handle_pdaf_block, "module-only" => 1, "h" => 1 },
+	"license" =>
+		{ "id" => 40, "func" => \&handle_license, "file-req" => 1, "h" => 1 },
+	"end" =>
+		{ "id" => 127, "func" => \&handle_end },
+);
+
+my $MAX_FIRST_BLOCK_ID = 31;
+
+sub handle_rule_block($$$) {
+	my ($rule_blocks, $block, $aref) = @_;
+
+	my $data;
+
+	foreach my $item (@$aref) {
+		foreach my $target (sort { $rule_blocks->{$a}->{id} <=>
+					     $rule_blocks->{$b}->{id}; }
+				    keys %$item) {
+			die "don't know how to handle $target" if ! exists $rule_blocks->{$target};
+
+			my $target_block = $rule_blocks->{$target}->{refer};
+
+			print "\tprocessing rule block $target\n"
+			  if $verbose;
+
+			my $block_content = arr_to_char($rule_blocks->{$target}->{id}) .
+			  process_block($target_block, $item->{$target});
+
+			$data .= length_specifier(length($block_content)) .
+			  $block_content;
+
+			delete $item->{$target};
+		}
+	}
+
+	undef @$aref;
+
+	return $data;
+}
+
+sub handle_condition($$) {
+	my ($block, $aref) = @_;
+	my $condition_content;
+
+	foreach my $condition (@$aref) {
+		my ($reg, $value, $mask) = split /\s+/, $condition;
+		my $reghr = reg_info($reg);
+
+		die "unknown register $reg" if ! defined $reghr;
+
+		$condition_content .= arr_to_char(to_16(hex $reghr->{addr}),
+						  to_8(hex $value,
+						       defined $mask ? (hex $mask) : 0xff));
+	}
+
+	undef @$aref;
+
+	return $condition_content;
+}
+
+my %condition_block =
+  (
+   "func" => \&handle_condition,
+  );
+
+sub handle_frame_format_desc($$) {
+	my ($block, $href) = @_;
+	my $content;
+	my %h = ( "rows" => 0 ,
+		  "columns" => 0 );
+	my %ffd_types = ( "embedded" => 1,
+			  "dummy" => 2,
+			  "black" => 3,
+			  "dark" => 4,
+			  "visible" => 5,
+			  "manufacturer-specific-0" => 8,
+			  "manufacturer-specific-1" => 9,
+			  "manufacturer-specific-2" => 10,
+			  "manufacturer-specific-3" => 11,
+			  "manufacturer-specific-4" => 12,
+			  "manufacturer-specific-5" => 13,
+			  "manufacturer-specific-6" => 14,
+			  "top-OB" => 16,
+			  "bottom-OB" => 17,
+			  "left-OB" => 18,
+			  "right-OB" => 19,
+			  "top-left-OB" => 20,
+			  "top-right-OB" => 21,
+			  "bottom-left-OB" => 22,
+			  "bottom-right-OB" => 23,
+			  "total" => 24,
+			  "top-PDAF" => 32,
+			  "bottom-PDAF" => 33,
+			  "left-PDAF" => 34,
+			  "right-PDAF" => 35,
+			  "top-left-PDAF" => 36,
+			  "top-right-PDAF" => 37,
+			  "bottom-left-PDAF" => 38,
+			  "bottom-right-PDAF" => 39,
+			  "separated-PDAF" => 40,
+			  "original-order-PDAF" => 41,
+			  "vendor-PDAF" => 42,
+			);
+
+	# "columns" before "rows"; hence sort
+	foreach my $which (sort keys %h) {
+		foreach my $ffd (@{$href->{$which}}) {
+			my ($reg, $value) = split /\s+/, $ffd;
+
+			if (exists $ffd_types{$reg}) {
+				$reg = $ffd_types{$reg};
+			} elsif (! scalar grep /^$reg$/, (map { $ffd_types{$_} }
+							  keys %ffd_types)) {
+				die "unknown frame format descriptor type $reg";
+			}
+
+			$value = oct($value) if $value =~ /^0/;
+
+			$h{$which}++;
+			# number of maximum descriptors of either type
+			die "too many $which $h{$which} in ffd"
+			  if $h{$which} >= 256;
+
+			$content .= arr_to_char(to_8($reg),
+						0,
+						to_16($value));
+		}
+
+		delete $href->{$which};
+	}
+
+	return arr_to_char($h{"columns"}, $h{"rows"}) . $content;
+}
+
+my %frame_format_desc =
+  (
+   "func" => \&handle_frame_format_desc, "h" => 1,
+  );
+
+sub handle_pdaf_readout($$) {
+	my ($block, $href) = @_;
+	my %readout_types = (
+			    "original-order" => 1,
+			    "separate-line-order" => 2,
+			    "separate-types-separate-lines" => 3,
+			   );
+	my $content;
+	my $readout_type;
+
+	$readout_type = ret_rm($href, "pdaf-readout-info");
+
+	$readout_type = $readout_types{$readout_type}
+	  if exists $readout_types{$readout_type};
+
+	$content = arr_to_char(to_8(0, $readout_type));
+
+	return $content .
+	  handle_frame_format_desc($block, ret_rm($href,
+						  "frame-format-descriptor"));
+}
+
+my %pdaf_readout =
+  (
+   "func" => \&handle_pdaf_readout, "h" => 1,
+  );
+
+my %sensor_rule_based_blocks =
+  (
+   "condition" => { "id" => 1, "refer" => \%condition_block },
+   "read-only-regs" => { "id" => 2, "refer" => $blocks{"sensor-read-only-regs" } },
+   "frame-format-descriptor" => { "id" => 3, "refer" => \%frame_format_desc },
+   "manufacturer-regs" => { "id" => 4, "refer" => $blocks{"sensor-manufacturer-regs"} },
+   "sorted-manufacturer-regs" => { "id" => 4, "refer" => $blocks{"sorted-sensor-manufacturer-regs"} },
+   "pdaf-readout" => { "id" => 5, "refer" => \%pdaf_readout },
+  );
+
+my %module_rule_based_blocks =
+  (
+   "condition" => { "id" => 1, "refer" => \%condition_block },
+   "read-only-regs" => { "id" => 2, "refer" => $blocks{"module-read-only-regs" } },
+   "frame-format-descriptor" => { "id" => 3, "refer" => \%frame_format_desc },
+   "manufacturer-regs" => { "id" => 4, "refer" => $blocks{"module-manufacturer-regs" } },
+   "sorted-manufacturer-regs" => { "id" => 4, "refer" => $blocks{"sorted-module-manufacturer-regs" } },
+   "pdaf-readout" => { "id" => 5, "refer" => \%pdaf_readout },
+  );
+
+sub handle_sensor_rule_block($$) {
+	my ($block, $aref) = @_;
+
+	return handle_rule_block(\%sensor_rule_based_blocks, $block, $aref);
+}
+
+sub handle_module_rule_block($$) {
+	my ($block, $aref) = @_;
+
+	return handle_rule_block(\%module_rule_based_blocks, $block, $aref);
+}
+
+sub handle_pdaf_block($$) {
+	my ($block, $href) = @_;
+	my %global_pdaf_types = (
+				 "separated" => 0,
+				 "side-by-side" => 1,
+				 "multiple-side-by-side" => 2,
+				);
+	my %pdaf_pixel_types = (
+				"left-separated" => 0,
+				"right-separated" => 1,
+				"top-separated" => 2,
+				"bottom-separated" => 3,
+				"left-side-by-side" => 4,
+				"right-side-by-side" => 5,
+				"top-side-by-side" => 6,
+				"bottom-side-by-side" => 7,
+				"top-left" => 8,
+				"top-right" => 9,
+				"bottom-left" => 10,
+				"bottom-right" => 11,
+			       );
+
+	my $content;
+	my $global_pdaf_type = ret_rm($href, "global-pdaf-type");
+
+	$global_pdaf_type = $global_pdaf_types{$global_pdaf_type}
+	  if exists $global_pdaf_types{$global_pdaf_type};
+
+	$content = arr_to_char(to_16(ret_rm($href, "main-offset-x"),
+				     ret_rm($href, "main-offset-y")),
+			       to_8($global_pdaf_type,
+				    ret_rm($href, "block-width"),
+				    ret_rm($href, "block-height")));
+
+	$content .= arr_to_char(to_16($#{$href->{"block-desc-groups"}} + 1));
+
+	foreach my $desc_group (@{$href->{"block-desc-groups"}}) {
+
+		$content .= arr_to_char(to_16($#{$desc_group->{"block-descs"}} + 1),
+					to_8(ret_rm($desc_group, "repeat-y")));
+
+		foreach my $group (@{$desc_group->{"block-descs"}}) {
+			$content .= arr_to_char(to_8(ret_rm($group, "block-type-id")),
+						to_16(ret_rm($group, "repeat-x")));
+
+			die "don't know how to handle:\n" . Dump $group
+			  if scalar keys %$group;
+		}
+
+		delete $desc_group->{"block-descs"};
+
+		die "don't know how to handle:\n" . Dump $desc_group
+		  if scalar keys %$desc_group;
+	}
+
+	delete $href->{"block-desc-groups"};
+
+	foreach my $pdgroup (@{$href->{"pixel-desc-groups"}}) {
+
+		$content .= arr_to_char(to_8($#{$pdgroup}) + 1);
+
+		foreach my $pixel (@$pdgroup) {
+			my $pixel_type = ret_rm($pixel, "pixel-type");
+
+			$pixel_type = $pdaf_pixel_types{$pixel_type}
+			  if exists $pdaf_pixel_types{$pixel_type};
+
+			$content .=
+			  arr_to_char(to_8($pixel_type,
+					   ret_rm($pixel, "small-offset-x"),
+					   ret_rm($pixel, "small-offset-y")));
+
+			die "don't know how to handle:\n" . Dump $pixel
+			  if scalar keys %$pixel;
+		}
+	}
+
+	delete $href->{"pixel-desc-groups"};
+
+	return $content;
+}
+
+sub block_header($) {
+	my ($len) = @_;
+
+	return length_specifier($len);
+}
+
+sub format_block($$$) {
+	my ($block, $result, $data) = @_;
+	my $len = length $data;
+	my $str;
+
+	die "block $block->{id} already exists"
+	  if defined $result->{$block->{id}};
+
+	if ($block->{id} == $blocks{dummy}->{id}) {
+		$str = "";
+		die "ouch" if $data ne "";
+	} else {
+		$str = block_header($len);
+	}
+
+	$result->{$block->{id}} = $str . $data;
+
+	printf "\t%u bytes\n", (length $str) + $len + 1
+	  if $verbose;
+}
+
+sub process_block($$) {
+	my ($block, $ref) = @_;
+	my $data;
+
+	if (! defined $ref) {
+		$data = $block->{func}->($block);
+	} elsif (defined $block->{h}) {
+		die "expecting " . (reftype {}) . ", got " .
+		  (reftype $ref) unless reftype $ref eq reftype {};
+		$data = $block->{func}->($block, $ref);
+		die "don't know how to handle:\n\t" . (Dump $ref)
+		  if scalar keys %$ref != 0;
+	} else {
+		die "expecting " . (reftype []) . ", got " .
+		  (reftype $ref) unless reftype $ref eq reftype [];
+		$data = $block->{func}->($block, $ref);
+		die "don't know how to handle:\n\t" . (Dump $ref)
+		  if $#{$ref} != -1;
+	}
+
+	return $data
+}
+
+sub blksortint($$) {
+	my ($c, $d) = @_;
+
+	return 1 if $c == $blocks{end}->{id};
+	return -1 if $d == $blocks{end}->{id};
+	return $c <=> $d;
+}
+
+sub blksort {
+	return blksortint($blocks{$a}->{id}, $blocks{$b}->{id});
+}
+
+my %result = (); # block id -> data
+
+foreach my $file (@files) {
+	my $all = YAML::Tiny::LoadFile($file) or die "can't open \"$file\" for reading";
+
+	foreach my $block (keys %{$all}) {
+		die "don't know how to handle block $block" if ! defined $blocks{$block};
+		$blocks{$block}->{name} = $block;
+	}
+
+	foreach my $block (sort blksort keys %{$all}) {
+		printf "processing block %s (0x%2.2x)\n",
+		  $block, $blocks{$block}->{id}
+		    if $verbose;
+
+		my $data = process_block($blocks{$block}, $all->{$block});
+
+		format_block($blocks{$block}, \%result, $data) if defined $data;
+	}
+}
+
+my @keys = sort keys %result;
+
+foreach my $block (sort blksort keys %blocks) {
+	die "block \"$block\" mandatory on EEPROM/NVM"
+		if $is_eeprom && defined $blocks{$block}->{"eeprom-req"} &&
+		   defined $result{$blocks{$block}->{id}};
+	die "block \"$block\" mandatory for files"
+		if !$is_eeprom && defined $blocks{$block}->{"file-req"} &&
+		   ! defined $result{$blocks{$block}->{id}};
+	die "block \"$block\" not allowed in sensor specific file"
+		if $is_sensor_file &&
+		   defined $blocks{$block}->{"module-only"} &&
+		   defined $result{$blocks{$block}->{id}};
+	die "block \"$block\" not allowed in module specific file"
+		if $is_module_file &&
+		   defined $blocks{$block}->{"sensor-only"} &&
+		   defined $result{$blocks{$block}->{id}};
+}
+
+
+if (defined $output) {
+	sysopen(OUT, $output, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW)
+	  or die "can't open \"$output\" for writing";
+} else {
+	open(OUT, ">-") or die "can't open stdout";
+}
+
+my $firstbytes = tell OUT;
+
+if ($#keys == -1 || $keys[0] > $MAX_FIRST_BLOCK_ID) {
+	format_block($blocks{dummy}, \%result, "");
+	print "added dummy block\n"
+	  if $verbose;
+}
+
+foreach my $blkid (sort blksortint keys %result) {
+	my $c = sprintf "%c", $blkid;
+	printf OUT $c;
+	$crc->add($c) if defined $crc;
+
+	if (!--$break_inject_count) {
+		if ($break_inject > 0) {
+			for my $i (1..$break_inject) {
+				chop $result{$blkid};
+			}
+		} else {
+			$result{$blkid} .= arr_to_char(0xff) x -$break_inject;
+		}
+	}
+
+	print OUT $result{$blkid};
+	$crc->add($result{$blkid}) if $crc;
+}
+
+# special handling for the end block
+if (defined $crc) {
+	my $oldpos = tell OUT;
+	my $c = sprintf "%c", $blocks{"end"}->{"id"};
+
+	print OUT $c;
+	$crc->add($c);
+
+	my $digest = $crc->hexdigest;
+	$digest = ("0" x (8 - length $digest)) . $digest;
+	$digest = hex_to_char $digest;
+	my $crc_head = block_header(length($digest));
+
+	print OUT $crc_head;
+	print OUT $digest;
+
+	printf "\t%u bytes\n", ((tell OUT) - $oldpos)
+	  if $verbose;
+}
+
+printf "%u bytes written in total\n", (tell OUT) - $firstbytes
+  if $verbose;
+
+close OUT;
+
+exit 99 if $break_len_count > 0;
