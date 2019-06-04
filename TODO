@@ -1,0 +1,9 @@
+- Packaging (Debian etc.)
+
+- Windows probably requires some changes
+
+- CRC check
+
+- Some error messages in ccs-yaml-to-bin could be improved
+
+- Gather limit information into C source code files for easier access

@@ -1,0 +1,4 @@
+---
+sensor-read-only-regs:
+# general status registers
+  - data_pedestal			0x00402049821039480293840283745937249582389457½

@@ -1,0 +1,3 @@
+---
+sensor-read-only-regs:
+  - max_per_lane_bitrate_lane_d_mode_mbps(-1)	3

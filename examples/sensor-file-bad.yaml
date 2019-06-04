@@ -1,0 +1,4 @@
+---
+sensor-read-only-regs:
+# general status registers
+  - 0x10101010310101014328908320948203948902			0x00
