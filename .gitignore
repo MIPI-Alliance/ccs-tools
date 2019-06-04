@@ -1,0 +1,6 @@
+*~
+*.o
+ccs-regs.h
+ccs-regs.c
+ccs-licenses.c
+ccs-bin-to-yaml
