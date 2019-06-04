@@ -1,0 +1,78 @@
+#!/usr/bin/perl -w
+#
+# Copyright (C) 2020 MIPI Alliance
+# Copyright (C) 2019--2020 Intel Corporation
+# SPDX-License-Identifier: BSD-3-Clause
+
+my $dir = "licenses";
+
+my $out;
+
+if ($#ARGV == 1 && ($ARGV[0] eq '-o' || $ARGV[0] eq '--output')) {
+	$out = $ARGV[1];
+} else {
+	print <<EOH
+$0 - Create CCS licenses file for C
+
+usage: $0 -o|--output filename
+EOH
+	  ;
+	exit 0;
+}
+
+open(OUT, ">:utf8", $out) or die "cannot open \"ccs-licenses.c\"";
+
+my @licenses = ();
+
+opendir(my $dirh, $dir) or die "cannot open $dir";
+my @fnames = sort { $a cmp $b } grep { $_ !~ /^.{1,2}$/ && $_ !~ /~$/ } readdir $dirh;
+closedir($dirh);
+
+print OUT <<EOF
+/* Copyright (C) 2020 MIPI Alliance */
+/* Copyright (C) 2019--2020 Intel Corporation */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+#include <stdint.h>
+#include <stdio.h>
+#include "ccs-extra.h"
+
+EOF
+  ;
+
+foreach my $name (@fnames) {
+	open(FILE, "<:utf8", "$dir/$name") or die "cannot open $dir/$name";
+
+	my $license_name = "ccs_license_$name";
+	$license_name =~ s/-/_/g;
+
+	my $out;
+	my $len = 0;
+
+	while (<FILE>) {
+		chop;
+		$len += 1 + length;
+		s/\'/\\\'/g;
+		s/\"/\\\"/g;
+		$out .= "\n\t  \"$_\\n\"";
+	}
+	close(FILE);
+
+	my $lh = {
+		  "filename" => $name,
+		  "text" => $out,
+		  "length" => $len,
+	};
+
+	push @licenses, $lh;
+}
+
+print OUT "const struct ccs_license ccs_licenses[] = {\n";
+
+foreach my $license (@licenses) {
+	print OUT "\t{ \"$license->{filename}\", $license->{text}, $license->{length} },\n";
+}
+
+print OUT "\t{ NULL, NULL, 0, },\n};\n";
+
+close(OUT);

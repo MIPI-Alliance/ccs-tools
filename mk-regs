@@ -1,0 +1,294 @@
+#!/usr/bin/perl -w
+#
+# Copyright (C) 2020 MIPI Alliance
+# Copyright (C) 2019--2020 Intel Corporation
+# SPDX-License-Identifier: BSD-3-Clause
+
+use Getopt::Long;
+use feature "switch";
+
+my $header;
+my $regarray;
+my $help;
+
+GetOptions("header|e=s" => \$header,
+	   "regarray|r=s" => \$regarray,
+	   "help|h" => \$help) or die "can't parse options";
+
+$help = 1 if ! defined $header || ! defined $regarray;
+
+if (defined $help) {
+	print <<EOH
+$0 - Create CCS register definitions for C
+
+usage: $0 -h header -r regarray
+
+	-h header file name
+	-r register description array
+EOH
+	  ;
+	exit 0;
+}
+
+open(my $R, "< ccs-regs.txt") or die "can't open ccs-regs.txt";
+
+open(my $H, "> $header") or die "can't open $header";
+open(my $A, "> $regarray") or die "can't open $regarray";
+
+my %this;
+
+my $uc_header = uc $header;
+$uc_header =~ s/[^A-Z0-9]/_/g;
+
+for my $fh ($A, $H) {
+	print $fh <<EOF
+/* Copyright (C) 2020 MIPI Alliance */
+/* Copyright (C) 2019--2020 Intel Corporation */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+EOF
+}
+
+print $H <<EOF
+#ifndef __${uc_header}__
+#define __${uc_header}__
+
+#define CCS_FL_16BIT		(1U << 0)
+#define CCS_FL_32BIT		(1U << 1)
+#define CCS_FL_FLOAT_IREAL	(1U << 2)
+#define CCS_FL_IREAL		(1U << 3)
+
+EOF
+  ;
+
+print $A <<EOF
+#include <stdint.h>
+#include <stdio.h>
+#include "ccs-extra.h"
+#include "ccs-regs.h"
+
+EOF
+  ;
+
+my $argdescs;
+my $reglist = "const struct ccs_reg_desc ccs_reg_desc[] = {\n";
+
+sub name_split($$) {
+	my ($name, $val) = @_;
+	my $args;
+
+	$name =~ /([^\(]+?)(\(.*)/;
+	($name, $args) = ($1, $2);
+	$args = [split /,\s*/, $args];
+	foreach my $t (@$args) {
+		$t =~ s/[\(\)]//g;
+		$t =~ s/\//\\\//g;
+	}
+
+	return ($name, $val, $args);
+}
+
+sub tabconv($) {
+	$_ = shift;
+
+	my @l = split "\n", $_;
+
+	map {
+		s/ {8,8}/\t/g;
+		s/\t\K +//;
+	} @l;
+
+	return (join "\n", @l) . "\n";
+}
+
+sub elem_size(@) {
+	my @flags = @_;
+
+	return 2 if grep /^16$/, @flags;
+	return 4 if grep /^32$/, @flags;
+	return 1;
+}
+
+sub print_args($$) {
+	my ($this, $postfix) = @_;
+	my ($args, $argparams, $name, $size) =
+	  ($this->{args}, $this->{argparams}, $this->{name}, $this->{size});
+	my $varname = "ccs_reg_arg_" . (lc $name) . $postfix;
+	my @mins;
+	my @sorted_args = @{$this->{sorted_args}};
+
+	$argdescs .= "static const struct ccs_reg_arg " . $varname . "[] = {\n";
+
+	foreach my $sorted_arg (@sorted_args) {
+		push @mins, $argparams->{$sorted_arg}->{min};
+	}
+
+	foreach my $sorted_arg (@sorted_args) {
+		my $h = $argparams->{$sorted_arg};
+
+		$argdescs .= "\t{ \"$sorted_arg\", $h->{min}, $h->{max}, $h->{elsize} },\n";
+
+		$size *= $h->{max} - $h->{min} + 1;
+	}
+
+	$argdescs .= "};\n\n";
+
+	$reglist .= "\t{ CCS_R_" . (uc $name) . "(" . (join ",", (@mins)) .
+	  "), $size, sizeof($varname) / sizeof(*$varname), CCS_FL_" . (uc $name) . "," .
+	    " \"" . (lc $name) . "\", $varname },\n";
+}
+
+my $hdr_data;
+
+while (<$R>) {
+	chop;
+	s/^\s*//;
+	next if /^[#;]/ || /^$/;
+	if (s/^-\s*//) {
+		if (s/^b\s*//) {
+			my ($bit, $val) = split /\t+/;
+			$bit = uc $bit;
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) ."_$bit", "(1U << $val)\n";
+		} elsif (s/^f\s*//) {
+			s/[,\.-]/_/g;
+			my @a = split /\s+/;
+			my ($msb, $lsb, $this_field) = reverse @a;
+		        @a = ( { "name" => "SHIFT", "val" => $lsb, "fmt" => "%uU", },
+			       { "name" => "MASK", "val" => (1 << ($msb + 1)) - 1 - ((1 << $lsb) - 1), "fmt" => "0x%" . join(".", ($this{"size"} >> 2) x 2) . "x" } );
+			$this{"field"} = $this_field;
+			foreach my $ar (@a) {
+				#print $ar->{fmt}."\n";
+				$hdr_data .= sprintf "#define %-62s " . $ar->{"fmt"} . "\n", "CCS_" . (uc $this{"name"}) . (defined $this_field ? "_" . uc $this_field : "") . "_" . $ar->{"name"}, $ar->{"val"} . "\n";
+			}
+		} elsif (s/^e\s*//) {
+			s/[,\.-]/_/g;
+			my ($enum, $val) = split /\s+/;
+			$enum = uc $enum;
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) . (defined $this{"field"} ? "_" . uc $this{"field"} : "") ."_$enum", $val . ($val =~ /0x/i ? "" : "U") . "\n";
+		} elsif (s/^l\s*//) {
+			my ($arg, $min, $max, $elsize, @discontig) = split /\s+/;
+
+			foreach my $num ($min, $max) {
+				$num = hex $num if $num =~ /0x/i;
+			}
+
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_LIM_" . (uc ${this{name}} . "_MIN_$arg"), $min . ($min =~ /0x/i ? "" : "U") . "\n";
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_LIM_" . (uc ${this{name}} . "_MAX_$arg"), $max . ($max =~ /0x/i ? "" : "U") . "\n";
+
+			my $h = $this{argparams};
+
+			$h->{$arg} = { "min" => $min,
+				       "max" => $max,
+				       "elsize" => $elsize =~ /^0x/ ? hex $elsize : $elsize,
+				       "discontig" => \@discontig };
+
+			$this{discontig} = $arg if @discontig;
+
+			next if $#{$this{args}} + 1 != scalar keys %{$this{argparams}};
+
+			my $formula = "($this{val}";
+
+			foreach my $arg (@{$this{args}}) {
+				my $d = $h->{$arg}->{discontig};
+				my $times = $h->{$arg}->{elsize} != 1 ?
+				  " * " . $h->{$arg}->{elsize} : "";
+
+				if (@$d) {
+					my ($lim, $offset) = split /,/, $d->[0];
+
+					$formula .= " + (($arg) < $lim ? ($arg)$times : $offset + (($arg) - $lim)$times)";
+				} else {
+					$formula .= " + ($arg)$times";
+				}
+			}
+
+			$formula .= ")\n";
+
+			print $H tabconv sprintf("#define %-62s %s", "CCS_R_" . (uc $this{name}) .
+			  $this{arglist}, $formula);
+
+			print $H tabconv $hdr_data;
+			undef $hdr_data;
+
+			# Sort arguments in descending order by size
+			@{$this{sorted_args}} = sort {
+				$h->{$a}->{elsize} <= $h->{$b}->{elsize}
+			} @{$this{args}};
+
+			if (defined $this{discontig}) {
+				my $da = $this{argparams}->{$this{discontig}};
+				my ($first_discontig) = split /,/, $da->{discontig}->[0];
+				my $max = $da->{max};
+
+				$da->{max} = $first_discontig - 1;
+				print_args(\%this, "");
+
+				$da->{min} = $da->{max} + 1;
+				$da->{max} = $max;
+				print_args(\%this, "_");
+			} else {
+				print_args(\%this, "");
+			}
+		}
+
+		if (! @{$this{args}}) {
+			print $H tabconv($hdr_data);
+			undef $hdr_data;
+		}
+
+		next;
+	}
+
+	my ($name, $val, @flags) = split /\t+/, $_;
+	my $args = [];
+
+	my $sp;
+
+	($name, $val, $args) = name_split($name, $val) if /\(.*\)/;
+
+	$name =~ s/[,\.-]/_/g;
+
+	my $flagstring = "";
+	my $size = elem_size(@flags);
+	$flagstring .= "| CCS_FL_16BIT " if $size eq "2";
+	$flagstring .= "| CCS_FL_32BIT " if $size eq "4";
+	$flagstring .= "| CCS_FL_FLOAT_IREAL " if grep /^float_ireal$/, @flags;
+	$flagstring .= "| CCS_FL_IREAL " if grep /^ireal$/, @flags;
+	$flagstring =~ s/^\| //;
+	$flagstring =~ s/ $//;
+	$flagstring = "($flagstring)" if $flagstring =~ /\|/;
+	$flagstring = "0" if $flagstring eq "";
+
+	my $arglist = @$args ? "(" . (join ", ", @$args) . ")" : "";
+	$hdr_data .= sprintf "#define %-62s %s\n", "CCS_R_" . (uc $name), $val
+	  if !@$args;
+	$hdr_data .= sprintf "#define %-62s %s\n", "CCS_FL_" . (uc $name), $flagstring;
+
+	$name =~ s/\(.*//;
+
+	%this = ( name => $name,
+		  val => $val,
+		  argparams => {},
+		  args => $args,
+		  arglist => $arglist,
+		  size => $size,
+		);
+
+	if (!@$args) {
+		$reglist .= "\t{ CCS_R_" . (uc $name) . ", 1,  0, CCS_FL_" . (uc $name) . ", \"" . (lc $name) . "\", NULL },\n";
+		print $H tabconv $hdr_data;
+		undef $hdr_data;
+	}
+}
+
+print $A $argdescs, $reglist;
+
+print $A "\t{ 0 }\n";
+
+print $A "};\n";
+
+print $H "\n#endif /* __${uc_header}__ */\n";
+
+close($R);
+close($H);
+close($A);
