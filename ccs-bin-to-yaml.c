@@ -152,10 +152,10 @@ static void print_data_version(const struct ccs_data_block_version *v,
 
 static unsigned int reg_bits(const struct ccs_reg_desc *reg)
 {
-	if (reg->flags & CCS_FL_16BIT)
+	if (reg->reg & CCS_FL_16BIT)
 		return 16;
 
-	if (reg->flags & CCS_FL_32BIT)
+	if (reg->reg & CCS_FL_32BIT)
 		return 32;
 
 	return 8;
@@ -166,8 +166,8 @@ static const struct ccs_reg_desc *get_reg_desc(uint16_t addr)
 	const struct ccs_reg_desc *rdesc = ccs_reg_desc;
 
 	while (rdesc->name) {
-		if (addr >= rdesc->addr &&
-		    addr <= rdesc->addr + rdesc->size - 1)
+		if (addr >= CCS_R_ADDR(rdesc->reg) &&
+		    addr <= CCS_R_ADDR(rdesc->reg) + rdesc->size - 1)
 			return rdesc;
 
 		rdesc++;
@@ -222,7 +222,7 @@ static int print_regs(const struct ccs_reg *regs, unsigned int num,
 				return -ENOENT;
 			}
 
-			offset = reg.addr - rdesc->addr;
+			offset = reg.addr - CCS_R_ADDR(rdesc->reg);
 
 			bits = reg_bits(rdesc);
 

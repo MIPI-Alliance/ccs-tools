@@ -18,10 +18,9 @@ struct ccs_reg_arg {
 };
 
 struct ccs_reg_desc {
-	uint16_t addr;
+	uint32_t reg;
 	uint16_t size;
 	uint8_t num_args;
-	uint8_t flags;
 	const char *name;
 	const struct ccs_reg_arg *args;
 };

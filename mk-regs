@@ -4,27 +4,34 @@
 # Copyright (C) 2019--2020 Intel Corporation
 # SPDX-License-Identifier: BSD-3-Clause
 
-use Getopt::Long;
+use Getopt::Long qw(:config no_ignore_case);
 use feature "switch";
 
 my $header;
 my $regarray;
+my $limitc;
+my $limith;
 my $help;
 
 GetOptions("header|e=s" => \$header,
 	   "regarray|r=s" => \$regarray,
+	   "limitc|l=s" => \$limitc,
+	   "limith|L=s" => \$limith,
 	   "help|h" => \$help) or die "can't parse options";
 
-$help = 1 if ! defined $header || ! defined $regarray;
+$help = 1 if ! defined $header || ! defined $regarray ||
+  ! defined $limitc || ! defined $limith;
 
 if (defined $help) {
 	print <<EOH
 $0 - Create CCS register definitions for C
 
-usage: $0 -h header -r regarray
+usage: $0 -h header -r regarray -l limit-c -L limit-header
 
 	-h header file name
-	-r register description array
+	-r register description array file name
+	-l limit and capability array file name
+	-L limit and capability header file name
 EOH
 	  ;
 	exit 0;
@@ -34,13 +41,24 @@ open(my $R, "< ccs-regs.txt") or die "can't open ccs-regs.txt";
 
 open(my $H, "> $header") or die "can't open $header";
 open(my $A, "> $regarray") or die "can't open $regarray";
+open(my $LC, "> $limitc") or die "can't open $limitc";
+open(my $LH, "> $limith") or die "can't open $limith";
 
 my %this;
+
+sub is_limit_reg($) {
+	my $addr = hex $_[0];
+
+	return 0 if $addr < 0x40; # weed out status registers
+	return 0 if $addr >= 0x100 && $addr < 0xfff; # weed out configuration registers
+
+	return 1;
+}
 
 my $uc_header = uc $header;
 $uc_header =~ s/[^A-Z0-9]/_/g;
 
-for my $fh ($A, $H) {
+for my $fh ($A) {
 	print $fh <<EOF
 /* Copyright (C) 2020 MIPI Alliance */
 /* Copyright (C) 2019--2020 Intel Corporation */
@@ -49,14 +67,26 @@ for my $fh ($A, $H) {
 EOF
 }
 
+for my $fh ($H, $LC, $LH) {
+	print $fh <<EOF
+/* SPDX-License-Identifier: BSD-3-Clause */
+/* Copyright (C) 2020 MIPI Alliance */
+/* Copyright 2019--2020 Intel Corporation */
+
+EOF
+}
+
 print $H <<EOF
 #ifndef __${uc_header}__
 #define __${uc_header}__
 
-#define CCS_FL_16BIT		(1U << 0)
-#define CCS_FL_32BIT		(1U << 1)
-#define CCS_FL_FLOAT_IREAL	(1U << 2)
-#define CCS_FL_IREAL		(1U << 3)
+#define CCS_FL_BASE		16
+#define CCS_FL_16BIT		(1U << CCS_FL_BASE)
+#define CCS_FL_32BIT		(1U << (CCS_FL_BASE + 1))
+#define CCS_FL_FLOAT_IREAL	(1U << (CCS_FL_BASE + 2))
+#define CCS_FL_IREAL		(1U << (CCS_FL_BASE + 3))
+
+#define CCS_R_ADDR(r)		((r) & 0xffff)
 
 EOF
   ;
@@ -70,11 +100,40 @@ print $A <<EOF
 EOF
   ;
 
+my $uc_limith = uc $limith;
+$uc_limith =~ s/[^A-Z0-9]/_/g;
+
+print $LH <<EOF
+#ifndef __${uc_limith}__
+#define __${uc_limith}__
+
+#include "ccs-os.h"
+
+struct ccs_limit {
+	uint32_t reg;
+	uint16_t size;
+	const char *name;
+};
+
+extern const struct ccs_limit ccs_limits[];
+
+EOF
+  ;
+
+print $LC <<EOF
+#include "ccs-limits.h"
+#include "ccs-regs.h"
+
+const struct ccs_limit ccs_limits[] = {
+EOF
+  ;
+
+my $limitcount = 0;
 my $argdescs;
 my $reglist = "const struct ccs_reg_desc ccs_reg_desc[] = {\n";
 
 sub name_split($$) {
-	my ($name, $val) = @_;
+	my ($name, $addr) = @_;
 	my $args;
 
 	$name =~ /([^\(]+?)(\(.*)/;
@@ -85,7 +144,7 @@ sub name_split($$) {
 		$t =~ s/\//\\\//g;
 	}
 
-	return ($name, $val, $args);
+	return ($name, $addr, $args);
 }
 
 sub tabconv($) {
@@ -109,13 +168,29 @@ sub elem_size(@) {
 	return 1;
 }
 
+sub arr_size($) {
+	my $this = $_[0];
+	my $size = $this->{elsize};
+	my $h = $this->{argparams};
+
+	foreach my $arg (@{$this->{args}}) {
+		my $apref = $h->{$arg};
+
+		$size *= $apref->{max} - $apref->{min} + 1;
+	}
+
+	return $size;
+}
+
 sub print_args($$) {
 	my ($this, $postfix) = @_;
-	my ($args, $argparams, $name, $size) =
-	  ($this->{args}, $this->{argparams}, $this->{name}, $this->{size});
+	my ($args, $argparams, $name) =
+	  ($this->{args}, $this->{argparams}, $this->{name});
 	my $varname = "ccs_reg_arg_" . (lc $name) . $postfix;
 	my @mins;
 	my @sorted_args = @{$this->{sorted_args}};
+	my $lim_arg;
+	my $size = arr_size($this);
 
 	$argdescs .= "static const struct ccs_reg_arg " . $varname . "[] = {\n";
 
@@ -128,14 +203,18 @@ sub print_args($$) {
 
 		$argdescs .= "\t{ \"$sorted_arg\", $h->{min}, $h->{max}, $h->{elsize} },\n";
 
-		$size *= $h->{max} - $h->{min} + 1;
+		$lim_arg .= defined $lim_arg ? ", $h->{min}" : "$h->{min}";
 	}
 
 	$argdescs .= "};\n\n";
 
 	$reglist .= "\t{ CCS_R_" . (uc $name) . "(" . (join ",", (@mins)) .
-	  "), $size, sizeof($varname) / sizeof(*$varname), CCS_FL_" . (uc $name) . "," .
+	  "), $size, sizeof($varname) / sizeof(*$varname)," .
 	    " \"" . (lc $name) . "\", $varname },\n";
+
+	print $LC tabconv sprintf "\t{ CCS_R_" . (uc $name) . "($lim_arg), " .
+	  $size . ", \"$name $lim_arg\" },\n"
+	    if is_limit_reg $this->{base_addr};
 }
 
 my $hdr_data;
@@ -146,27 +225,28 @@ while (<$R>) {
 	next if /^[#;]/ || /^$/;
 	if (s/^-\s*//) {
 		if (s/^b\s*//) {
-			my ($bit, $val) = split /\t+/;
+			my ($bit, $addr) = split /\t+/;
 			$bit = uc $bit;
-			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) ."_$bit", "(1U << $val)\n";
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) ."_$bit", "(1U << $addr)\n";
 		} elsif (s/^f\s*//) {
 			s/[,\.-]/_/g;
 			my @a = split /\s+/;
 			my ($msb, $lsb, $this_field) = reverse @a;
-		        @a = ( { "name" => "SHIFT", "val" => $lsb, "fmt" => "%uU", },
-			       { "name" => "MASK", "val" => (1 << ($msb + 1)) - 1 - ((1 << $lsb) - 1), "fmt" => "0x%" . join(".", ($this{"size"} >> 2) x 2) . "x" } );
+		        @a = ( { "name" => "SHIFT", "addr" => $lsb, "fmt" => "%uU", },
+			       { "name" => "MASK", "addr" => (1 << ($msb + 1)) - 1 - ((1 << $lsb) - 1), "fmt" => "0x%" . join(".", ($this{"elsize"} >> 2) x 2) . "x" } );
 			$this{"field"} = $this_field;
 			foreach my $ar (@a) {
 				#print $ar->{fmt}."\n";
-				$hdr_data .= sprintf "#define %-62s " . $ar->{"fmt"} . "\n", "CCS_" . (uc $this{"name"}) . (defined $this_field ? "_" . uc $this_field : "") . "_" . $ar->{"name"}, $ar->{"val"} . "\n";
+				$hdr_data .= sprintf "#define %-62s " . $ar->{"fmt"} . "\n", "CCS_" . (uc $this{"name"}) . (defined $this_field ? "_" . uc $this_field : "") . "_" . $ar->{"name"}, $ar->{"addr"} . "\n";
 			}
 		} elsif (s/^e\s*//) {
 			s/[,\.-]/_/g;
-			my ($enum, $val) = split /\s+/;
+			my ($enum, $addr) = split /\s+/;
 			$enum = uc $enum;
-			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) . (defined $this{"field"} ? "_" . uc $this{"field"} : "") ."_$enum", $val . ($val =~ /0x/i ? "" : "U") . "\n";
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) . (defined $this{"field"} ? "_" . uc $this{"field"} : "") ."_$enum", $addr . ($addr =~ /0x/i ? "" : "U") . "\n";
 		} elsif (s/^l\s*//) {
 			my ($arg, $min, $max, $elsize, @discontig) = split /\s+/;
+			my $size;
 
 			foreach my $num ($min, $max) {
 				$num = hex $num if $num =~ /0x/i;
@@ -186,7 +266,8 @@ while (<$R>) {
 
 			next if $#{$this{args}} + 1 != scalar keys %{$this{argparams}};
 
-			my $formula = "($this{val}";
+			my $reg_formula = "($this{addr}";
+			my $lim_formula;
 
 			foreach my $arg (@{$this{args}}) {
 				my $d = $h->{$arg}->{discontig};
@@ -196,16 +277,19 @@ while (<$R>) {
 				if (@$d) {
 					my ($lim, $offset) = split /,/, $d->[0];
 
-					$formula .= " + (($arg) < $lim ? ($arg)$times : $offset + (($arg) - $lim)$times)";
+					$reg_formula .= " + (($arg) < $lim ? ($arg)$times : $offset + (($arg) - $lim)$times)";
 				} else {
-					$formula .= " + ($arg)$times";
+					$reg_formula .= " + ($arg)$times";
 				}
+
+				$lim_formula .= (defined $lim_formula ? " + " : "") . "($arg)$times";
 			}
 
-			$formula .= ")\n";
+			$reg_formula .= ")\n";
+			$lim_formula =~ s/^\(([a-z0-9]+)\)$/$1/i;
 
 			print $H tabconv sprintf("#define %-62s %s", "CCS_R_" . (uc $this{name}) .
-			  $this{arglist}, $formula);
+			  $this{arglist}, $reg_formula);
 
 			print $H tabconv $hdr_data;
 			undef $hdr_data;
@@ -229,6 +313,12 @@ while (<$R>) {
 			} else {
 				print_args(\%this, "");
 			}
+
+			next unless is_limit_reg $this{base_addr};
+
+			print $LH tabconv sprintf "#define %-63s%s\n",
+			  "CCS_L_" . (uc $this{name}) . "_OFFSET(" .
+			    (join ", ", @{$this{args}}) . ")", "($lim_formula)";
 		}
 
 		if (! @{$this{args}}) {
@@ -239,12 +329,12 @@ while (<$R>) {
 		next;
 	}
 
-	my ($name, $val, @flags) = split /\t+/, $_;
+	my ($name, $addr, @flags) = split /\t+/, $_;
 	my $args = [];
 
 	my $sp;
 
-	($name, $val, $args) = name_split($name, $val) if /\(.*\)/;
+	($name, $addr, $args) = name_split($name, $addr) if /\(.*\)/;
 
 	$name =~ s/[,\.-]/_/g;
 
@@ -257,28 +347,37 @@ while (<$R>) {
 	$flagstring =~ s/^\| //;
 	$flagstring =~ s/ $//;
 	$flagstring = "($flagstring)" if $flagstring =~ /\|/;
-	$flagstring = "0" if $flagstring eq "";
+	my $base_addr = $addr;
+	$addr = "($addr | $flagstring)" if $flagstring ne "";
 
 	my $arglist = @$args ? "(" . (join ", ", @$args) . ")" : "";
-	$hdr_data .= sprintf "#define %-62s %s\n", "CCS_R_" . (uc $name), $val
+	$hdr_data .= sprintf "#define %-62s %s\n", "CCS_R_" . (uc $name), $addr
 	  if !@$args;
-	$hdr_data .= sprintf "#define %-62s %s\n", "CCS_FL_" . (uc $name), $flagstring;
 
 	$name =~ s/\(.*//;
 
 	%this = ( name => $name,
-		  val => $val,
+		  addr => $addr,
+		  base_addr => $base_addr,
 		  argparams => {},
 		  args => $args,
 		  arglist => $arglist,
-		  size => $size,
+		  elsize => $size,
 		);
 
 	if (!@$args) {
-		$reglist .= "\t{ CCS_R_" . (uc $name) . ", 1,  0, CCS_FL_" . (uc $name) . ", \"" . (lc $name) . "\", NULL },\n";
+		$reglist .= "\t{ CCS_R_" . (uc $name) . ", 1,  0, \"" . (lc $name) . "\", NULL },\n";
 		print $H tabconv $hdr_data;
 		undef $hdr_data;
+
+		print $LC tabconv sprintf "\t{ CCS_R_" . (uc $name) . ", " .
+		  $this{elsize} . ", \"$name\" },\n"
+		    if is_limit_reg $this{base_addr};
 	}
+
+	print $LH tabconv sprintf "#define %-63s%s\n",
+	  "CCS_L_" . (uc $this{name}), $limitcount++
+	    if is_limit_reg $this{base_addr};
 }
 
 print $A $argdescs, $reglist;
@@ -289,6 +388,14 @@ print $A "};\n";
 
 print $H "\n#endif /* __${uc_header}__ */\n";
 
+print $LH tabconv sprintf "#define %-63s%s\n", "CCS_L_LAST", $limitcount;
+
+print $LH "\n#endif /* __${uc_limith}__ */\n";
+
+print $LC "};\n";
+
 close($R);
 close($H);
 close($A);
+close($LC);
+close($LH);

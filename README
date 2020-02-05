@@ -43,7 +43,8 @@ ccs-regs.txt
 mk-regs, mk-licenses
 
 	Scripts for producing C header and source code files from ccs-regs.txt
-	and files in "licenses" directory.
+	and files in "licenses" directory. The script also produces a C array
+	and header for reading the limit and capability information in drivers.
 
 licenses
 
