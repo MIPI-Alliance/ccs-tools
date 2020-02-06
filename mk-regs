@@ -112,8 +112,11 @@ print $LH <<EOF
 struct ccs_limit {
 	uint32_t reg;
 	uint16_t size;
+	uint16_t flags;
 	const char *name;
 };
+
+#define CCS_L_FL_SAME_REG	(1U << 0)
 
 extern const struct ccs_limit ccs_limits[];
 
@@ -182,8 +185,8 @@ sub arr_size($) {
 	return $size;
 }
 
-sub print_args($$) {
-	my ($this, $postfix) = @_;
+sub print_args($$$) {
+	my ($this, $postfix, $is_same_reg) = @_;
 	my ($args, $argparams, $name) =
 	  ($this->{args}, $this->{argparams}, $this->{name});
 	my $varname = "ccs_reg_arg_" . (lc $name) . $postfix;
@@ -213,8 +216,9 @@ sub print_args($$) {
 	    " \"" . (lc $name) . "\", $varname },\n";
 
 	print $LC tabconv sprintf "\t{ CCS_R_" . (uc $name) . "($lim_arg), " .
-	  $size . ", \"$name" . (defined $this->{discontig} ? " $lim_arg" : "") . "\" },\n"
-	    if is_limit_reg $this->{base_addr};
+	  $size . ", " . ($is_same_reg ? "CCS_L_FL_SAME_REG" : "0") .
+	    ", \"$name" . (defined $this->{discontig} ? " $lim_arg" : "") . "\" },\n"
+	      if is_limit_reg $this->{base_addr};
 }
 
 my $hdr_data;
@@ -305,13 +309,13 @@ while (<$R>) {
 				my $max = $da->{max};
 
 				$da->{max} = $first_discontig - 1;
-				print_args(\%this, "");
+				print_args(\%this, "", 0);
 
 				$da->{min} = $da->{max} + 1;
 				$da->{max} = $max;
-				print_args(\%this, "_");
+				print_args(\%this, $first_discontig, 1);
 			} else {
-				print_args(\%this, "");
+				print_args(\%this, "", 0);
 			}
 
 			next unless is_limit_reg $this{base_addr};
@@ -371,7 +375,7 @@ while (<$R>) {
 		undef $hdr_data;
 
 		print $LC tabconv sprintf "\t{ CCS_R_" . (uc $name) . ", " .
-		  $this{elsize} . ", \"$name\" },\n"
+		  $this{elsize} . ", 0, \"$name\" },\n"
 		    if is_limit_reg $this{base_addr};
 	}
 
