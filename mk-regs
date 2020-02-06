@@ -396,6 +396,7 @@ print $LH tabconv sprintf "#define %-63s%s\n", "CCS_L_LAST", $limitcount;
 
 print $LH "\n#endif /* __${uc_limith}__ */\n";
 
+print $LC "\t{ 0 } /* Guardian */\n";
 print $LC "};\n";
 
 close($R);
