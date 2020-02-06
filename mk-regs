@@ -213,7 +213,7 @@ sub print_args($$) {
 	    " \"" . (lc $name) . "\", $varname },\n";
 
 	print $LC tabconv sprintf "\t{ CCS_R_" . (uc $name) . "($lim_arg), " .
-	  $size . ", \"$name $lim_arg\" },\n"
+	  $size . ", \"$name" . (defined $this->{discontig} ? " $lim_arg" : "") . "\" },\n"
 	    if is_limit_reg $this->{base_addr};
 }
 
