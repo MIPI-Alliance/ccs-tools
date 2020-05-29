@@ -58,22 +58,16 @@ sub is_limit_reg($) {
 my $uc_header = uc $header;
 $uc_header =~ s/[^A-Z0-9]/_/g;
 
-for my $fh ($A) {
-	print $fh <<EOF
-/* Copyright (C) 2020 MIPI Alliance */
-/* Copyright (C) 2019--2020 Intel Corporation */
-/* SPDX-License-Identifier: BSD-3-Clause */
+my $copyright = "/* Copyright (C) 2019--2020 Intel Corporation */\n";
+$copyright = "/* Copyright (C) 2020 MIPI Alliance */\n$copyright";
+my $license = "SPDX-License-Identifier: BSD-3-Clause";
 
-EOF
+for my $fh ($A, $LC) {
+	print $fh "// $license\n$copyright\n";
 }
 
-for my $fh ($H, $LC, $LH) {
-	print $fh <<EOF
-/* SPDX-License-Identifier: BSD-3-Clause */
-/* Copyright (C) 2020 MIPI Alliance */
-/* Copyright 2019--2020 Intel Corporation */
-
-EOF
+for my $fh ($H, $LH) {
+	print $fh "/* $license */\n$copyright\n";
 }
 
 print $H <<EOF
