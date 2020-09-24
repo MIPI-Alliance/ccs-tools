@@ -88,6 +88,11 @@ hexadecimal notation. For registers specified by name, also decimal
 notation is supported. Enumerated text based values are also supported on
 registers with an enumerated list of possible values.
 
+Floating point and ireal numbers are also supported; they are prefixed
+with either "float" or "ireal" strings and the result is converted to
+32-bit integer value fit for a 32-bit register. Note that some registers
+may use float and others ireal format even on the same device.
+
 Register arrays can be accessed using the register name and the indices
 separated by comma in parentheses:
 

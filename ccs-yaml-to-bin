@@ -209,12 +209,21 @@ while (<REGS>) {
 }
 close(REGS);
 
-sub unhex($) {
+sub __unhex($) {
 	die "$_[0]: " . (join ": ", caller)
 	  unless defined $_[0] && is_numeric($_[0]);
 
 	return hex $_[0] if $_[0] =~ /^0x/i;
 	return $_[0];
+}
+
+sub unhex($) {
+	return unpack("L", pack("f", __unhex($_[0])))
+	  if $_[0] =~ s/^float\s*//i;
+	return snprintf("0x%8.8x", __unhex($_[0]) * 65536 / 1000000)
+	  if $_[0] =~ s/^ireal\s*//i;
+
+	return __unhex($_[0]);
 }
 
 sub reg_info($) {
