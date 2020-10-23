@@ -25,9 +25,9 @@ if (defined $help) {
 	print <<EOH
 $0 - Create CCS register definitions for C
 
-usage: $0 -h header -r regarray -l limit-c -L limit-header
+usage: $0 -e header -r regarray -l limit-c -L limit-header
 
-	-h header file name
+	-e header file name
 	-r register description array file name
 	-l limit and capability array file name
 	-L limit and capability header file name
