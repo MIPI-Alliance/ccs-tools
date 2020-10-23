@@ -5,28 +5,31 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 use Getopt::Long qw(:config no_ignore_case);
+use File::Basename;
 
+my $ccsregs = "ccs-regs.txt";
 my $header;
 my $regarray;
 my $limitc;
 my $limith;
 my $help;
 
-GetOptions("header|e=s" => \$header,
+GetOptions("ccsregs|c=s" => \$ccsregs,
+	   "header|e=s" => \$header,
 	   "regarray|r=s" => \$regarray,
 	   "limitc|l=s" => \$limitc,
 	   "limith|L=s" => \$limith,
 	   "help|h" => \$help) or die "can't parse options";
 
-$help = 1 if ! defined $header || ! defined $regarray ||
-  ! defined $limitc || ! defined $limith;
+$help = 1 if ! defined $header || ! defined $limitc || ! defined $limith;
 
 if (defined $help) {
 	print <<EOH
 $0 - Create CCS register definitions for C
 
-usage: $0 -e header -r regarray -l limit-c -L limit-header
+usage: $0 -c ccs-regs.txt -e header -r regarray -l limit-c -L limit-header
 
+	-c ccs register file
 	-e header file name
 	-r register description array file name
 	-l limit and capability array file name
@@ -36,10 +39,13 @@ EOH
 	exit 0;
 }
 
-open(my $R, "< ccs-regs.txt") or die "can't open ccs-regs.txt";
+open(my $R, "< $ccsregs") or die "can't open $ccsregs";
 
 open(my $H, "> $header") or die "can't open $header";
-open(my $A, "> $regarray") or die "can't open $regarray";
+my $A;
+if (defined $regarray) {
+	open($A, "> $regarray") or die "can't open $regarray";
+}
 open(my $LC, "> $limitc") or die "can't open $limitc";
 open(my $LH, "> $limith") or die "can't open $limith";
 
@@ -54,7 +60,7 @@ sub is_limit_reg($) {
 	return 1;
 }
 
-my $uc_header = uc $header;
+my $uc_header = basename uc $header;
 $uc_header =~ s/[^A-Z0-9]/_/g;
 
 my $copyright = "/* Copyright (C) 2019--2020 Intel Corporation */\n";
@@ -62,7 +68,7 @@ $copyright = "/* Copyright (C) 2020 MIPI Alliance */\n$copyright";
 my $license = "SPDX-License-Identifier: BSD-3-Clause";
 
 for my $fh ($A, $LC) {
-	print $fh "// $license\n$copyright\n";
+	print $fh "// $license\n$copyright\n" if defined $fh;
 }
 
 for my $fh ($H, $LH) {
@@ -91,9 +97,9 @@ print $A <<EOF
 #include "ccs-regs.h"
 
 EOF
-  ;
+	if defined $A;
 
-my $uc_limith = uc $limith;
+my $uc_limith = basename uc $limith;
 $uc_limith =~ s/[^A-Z0-9]/_/g;
 
 print $LH <<EOF
@@ -377,11 +383,13 @@ while (<$R>) {
 	    if is_limit_reg $this{base_addr};
 }
 
-print $A $argdescs, $reglist;
+if (defined $A) {
+	print $A $argdescs, $reglist;
 
-print $A "\t{ 0 }\n";
+	print $A "\t{ 0 }\n";
 
-print $A "};\n";
+	print $A "};\n";
+}
 
 print $H "\n#endif /* __${uc_header}__ */\n";
 
@@ -394,6 +402,6 @@ print $LC "};\n";
 
 close($R);
 close($H);
-close($A);
+close($A) if defined $A;
 close($LC);
 close($LH);
