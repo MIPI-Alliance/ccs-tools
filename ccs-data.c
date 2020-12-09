@@ -243,7 +243,7 @@ static int ccs_data_parse_regs(struct bin_container *bin,
 				return -ENODATA;
 
 			addr += ((uint16_t)(r2->reg_len &
-				 CCS_DATA_BLOCK_REGS_2_ADDR_MASK) << 8)
+					    CCS_DATA_BLOCK_REGS_2_ADDR_MASK) << 8)
 				+ r2->addr;
 			len = ((r2->reg_len & CCS_DATA_BLOCK_REGS_2_LEN_MASK)
 			       >> CCS_DATA_BLOCK_REGS_2_LEN_SHIFT) + 1;
@@ -780,7 +780,8 @@ static int __ccs_data_parse(struct bin_container *bin,
 
 	version = ccs_data_parse_format_version(block);
 	if (version != CCS_STATIC_DATA_VERSION) {
-		os_printf(fh, "Don't know how to handle version %u\n", version);
+		os_printf(fh, "Don't know how to handle version %u\n",
+			  version);
 		return -EINVAL;
 	}
 
@@ -886,7 +887,8 @@ static int __ccs_data_parse(struct bin_container *bin,
 				return rval;
 			break;
 		default:
-			os_printf(fh, "WARNING: not handling block ID 0x%2.2x\n",
+			os_printf(fh,
+				  "WARNING: not handling block ID 0x%2.2x\n",
 				  block_id);
 		}
 
