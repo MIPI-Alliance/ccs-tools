@@ -899,8 +899,17 @@ static int __ccs_data_parse(struct bin_container *bin,
 	return 0;
 }
 
-int ccs_data_parse(struct ccs_data_container *ccsdata,
-		   const void *data, size_t len, printf_ctx fh, bool verbose)
+/**
+ * ccs_data_parse - Parse a CCS static data file into a usable in-memory
+ *		    data structure
+ * @ccsdata:	CCS static data in-memory data structure
+ * @data:	CCS static data binary
+ * @len:	Length of @data
+ * @dev:	Device the data is related to (used for printing debug messages)
+ * @verbose:	Whether to be verbose or not
+ */
+int ccs_data_parse(struct ccs_data_container *ccsdata, const void *data,
+		   size_t len, printf_ctx fh, bool verbose)
 {
 	struct bin_container bin = { 0 };
 	int rval;
