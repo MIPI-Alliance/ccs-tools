@@ -12,6 +12,7 @@ my $header;
 my $regarray;
 my $limitc;
 my $limith;
+my $kernel;
 my $help;
 
 GetOptions("ccsregs|c=s" => \$ccsregs,
@@ -19,6 +20,7 @@ GetOptions("ccsregs|c=s" => \$ccsregs,
 	   "regarray|r=s" => \$regarray,
 	   "limitc|l=s" => \$limitc,
 	   "limith|L=s" => \$limith,
+	   "kernel|k" => \$kernel,
 	   "help|h" => \$help) or die "can't parse options";
 
 $help = 1 if ! defined $header || ! defined $limitc || ! defined $limith;
@@ -27,17 +29,24 @@ if (defined $help) {
 	print <<EOH
 $0 - Create CCS register definitions for C
 
-usage: $0 -c ccs-regs.asc -e header -r regarray -l limit-c -L limit-header
+usage: $0 -c ccs-regs.asc -e header -r regarray -l limit-c -L limit-header [-k]
 
 	-c ccs register file
 	-e header file name
 	-r register description array file name
 	-l limit and capability array file name
 	-L limit and capability header file name
+	-k generate files for kernel space consumption
 EOH
 	  ;
 	exit 0;
 }
+
+my $lh_hdr = ! defined $kernel
+	? '#include "ccs-os.h"' . "\n"
+	: "#include <linux/bits.h>\n#include <linux/types.h>\n";
+my $uint32_t = ! defined $kernel ? 'uint32_t' : 'u32';
+my $uint16_t = ! defined $kernel ? 'uint16_t' : 'u16';
 
 open(my $R, "< $ccsregs") or die "can't open $ccsregs";
 
@@ -75,16 +84,34 @@ for my $fh ($H, $LH) {
 	print $fh "/* $license */\n$copyright\n";
 }
 
+sub bit_def($) {
+	my $bit = shift @_;
+
+	return "BIT($bit)" if defined $kernel;
+	return "(1U << $bit)" if $bit =~ /^[a-zA-Z0-9_]+$/;
+	return "(1U << ($bit))";
+}
+
 print $H <<EOF
 #ifndef __${uc_header}__
 #define __${uc_header}__
 
-#define CCS_FL_BASE		16
-#define CCS_FL_16BIT		(1U << CCS_FL_BASE)
-#define CCS_FL_32BIT		(1U << (CCS_FL_BASE + 1))
-#define CCS_FL_FLOAT_IREAL	(1U << (CCS_FL_BASE + 2))
-#define CCS_FL_IREAL		(1U << (CCS_FL_BASE + 3))
+EOF
+  ;
 
+print $H "#include <linux/bits.h>\n\n" if defined $kernel;
+
+print $H <<EOF
+#define CCS_FL_BASE		16
+EOF
+  ;
+
+print $H "#define CCS_FL_16BIT		" . bit_def("CCS_FL_BASE") . "\n";
+print $H "#define CCS_FL_32BIT		" . bit_def("CCS_FL_BASE + 1") . "\n";
+print $H "#define CCS_FL_FLOAT_IREAL	" . bit_def("CCS_FL_BASE + 2") . "\n";
+print $H "#define CCS_FL_IREAL		" . bit_def("CCS_FL_BASE + 3") . "\n";
+
+print $H <<EOF
 #define CCS_R_ADDR(r)		((r) & 0xffff)
 
 EOF
@@ -106,17 +133,19 @@ print $LH <<EOF
 #ifndef __${uc_limith}__
 #define __${uc_limith}__
 
-#include "ccs-os.h"
-
+$lh_hdr
 struct ccs_limit {
-	uint32_t reg;
-	uint16_t size;
-	uint16_t flags;
+	$uint32_t reg;
+	$uint16_t size;
+	$uint16_t flags;
 	const char *name;
 };
 
-#define CCS_L_FL_SAME_REG	(1U << 0)
+EOF
+  ;
+print $LH "#define CCS_L_FL_SAME_REG	" . bit_def(0) . "\n\n";
 
+print $LH <<EOF
 extern const struct ccs_limit ccs_limits[];
 
 EOF
@@ -230,7 +259,7 @@ while (<$R>) {
 		if (s/^b\s*//) {
 			my ($bit, $addr) = split /\t+/;
 			$bit = uc $bit;
-			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) ."_$bit", "(1U << $addr)\n";
+			$hdr_data .= sprintf "#define %-62s %s", "CCS_" . (uc ${this{name}}) ."_$bit", bit_def($addr) . "\n";
 		} elsif (s/^f\s*//) {
 			s/[,\.-]/_/g;
 			my @a = split /\s+/;
