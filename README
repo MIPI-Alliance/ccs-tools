@@ -40,7 +40,7 @@ ccs-regs.asc
 
 	Definitions of CCS standard registers.
 
-mk-regs, mk-licenses
+mk-ccs-regs, mk-licenses
 
 	Scripts for producing C header and source code files from ccs-regs.asc
 	and files in "licenses" directory. The script also produces a C array
