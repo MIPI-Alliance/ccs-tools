@@ -13,19 +13,6 @@ struct bin_container {
 	size_t size;
 };
 
-static uint32_t u8_arr_to_u32(const uint8_t *arr, unsigned int size)
-{
-	unsigned int i;
-	uint32_t value = arr[0];
-
-	for (i = 1; i < size; i++) {
-		value <<= 8;
-		value += arr[i];
-	}
-
-	return value;
-}
-
 static void *bin_alloc(struct bin_container *bin, size_t len)
 {
 	void *ptr;
@@ -103,8 +90,7 @@ ccs_data_parse_length_specifier(const struct __ccs_data_length_specifier *__len,
 		plen = ((size_t)
 			(__len3->length[0] &
 			 ((1 << CCS_DATA_LENGTH_SPECIFIER_SIZE_SHIFT) - 1))
-			<< 16) + u8_arr_to_u32(&__len3->length[1],
-					       sizeof(__len3->length) - 1);
+			<< 16) + (__len3->length[0] << 8) + __len3->length[1];
 		break;
 	}
 	default:
@@ -155,9 +141,11 @@ static int ccs_data_parse_version(struct bin_container *bin,
 		return -ENOMEM;
 
 	vv = ccsdata->version;
-	vv->version_major = u8_arr_to_u32(v->static_data_version_major, 2);
-	vv->version_minor = u8_arr_to_u32(v->static_data_version_minor, 2);
-	vv->date_year = u8_arr_to_u32(v->year, 2);
+	vv->version_major = ((uint16_t)v->static_data_version_major[0] << 8) +
+		v->static_data_version_major[1];
+	vv->version_minor = ((uint16_t)v->static_data_version_minor[0] << 8) +
+		v->static_data_version_minor[1];
+	vv->date_year =  ((uint16_t)v->year[0] << 8) + v->year[1];
 	vv->date_month = v->month;
 	vv->date_day = v->day;
 
@@ -272,7 +260,7 @@ static int ccs_data_parse_regs(struct bin_container *bin,
 			if (!is_contained(r3, endp))
 				return -ENODATA;
 
-			addr = u8_arr_to_u32(r3->addr, sizeof(r3->addr));
+			addr = ((uint16_t)r3->addr[0] << 8) + r3->addr[1];
 			len = (r3->reg_len & CCS_DATA_BLOCK_REGS_3_LEN_MASK) + 1;
 
 			if (!is_contained_with_headroom(r3, len, endp))
@@ -339,7 +327,7 @@ static void assign_ffd_entry(struct ccs_frame_format_desc *desc,
 			     const struct __ccs_data_block_ffd_entry *ent)
 {
 	desc->pixelcode = ent->pixelcode;
-	desc->value = u8_arr_to_u32(ent->value, sizeof(ent->value));
+	desc->value = ((uint16_t)ent->value[0] << 8) + ent->value[1];
 }
 
 static int ccs_data_parse_ffd(struct bin_container *bin,
@@ -499,10 +487,9 @@ static int ccs_data_parse_rules(struct bin_container *bin,
 
 				for (i = 0; i < __num_if_rules; i++) {
 					if_rule[i].addr =
-						u8_arr_to_u32(
-							__if_rules[i].addr,
-							sizeof(__if_rules[i].
-							       addr));
+						((uint16_t)__if_rules[i].addr[0]
+						 << 8) +
+						__if_rules[i].addr[1];
 					if_rule[i].value = __if_rules[i].value;
 					if_rule[i].mask = __if_rules[i].mask;
 				}
@@ -591,16 +578,16 @@ static int ccs_data_parse_pdaf(struct bin_container *bin, struct ccs_pdaf_pix_lo
 	}
 
 	num_block_desc_groups =
-		u8_arr_to_u32(__pdaf->num_block_desc_groups,
-			      sizeof(__pdaf->num_block_desc_groups));
+		((uint16_t)__pdaf->num_block_desc_groups[0] << 8) +
+		__pdaf->num_block_desc_groups[1];
 
 	if (bin->base) {
 		(*pdaf)->main_offset_x =
-			u8_arr_to_u32(__pdaf->main_offset_x,
-				      sizeof(__pdaf->main_offset_x));
+			((uint16_t)__pdaf->main_offset_x[0] << 8) +
+			__pdaf->main_offset_x[1];
 		(*pdaf)->main_offset_y =
-			u8_arr_to_u32(__pdaf->main_offset_y,
-				      sizeof(__pdaf->main_offset_y));
+			((uint16_t)__pdaf->main_offset_y[0] << 8) +
+			__pdaf->main_offset_y[1];
 		(*pdaf)->global_pdaf_type = __pdaf->global_pdaf_type;
 		(*pdaf)->block_width = __pdaf->block_width;
 		(*pdaf)->block_height = __pdaf->block_height;
@@ -630,8 +617,8 @@ static int ccs_data_parse_pdaf(struct bin_container *bin, struct ccs_pdaf_pix_lo
 			return -ENODATA;
 
 		num_block_descs =
-			u8_arr_to_u32(__bdesc_group->num_block_descs,
-				      sizeof(__bdesc_group->num_block_descs));
+			((uint16_t)__bdesc_group->num_block_descs[0] << 8) +
+			__bdesc_group->num_block_descs[1];
 
 		if (bin->base) {
 			(*pdaf)->block_desc_groups[i].repeat_y =
@@ -668,9 +655,8 @@ static int ccs_data_parse_pdaf(struct bin_container *bin, struct ccs_pdaf_pix_lo
 
 			bdesc = &(*pdaf)->block_desc_groups[i].block_descs[j];
 
-			bdesc->repeat_x = u8_arr_to_u32(
-					__bdesc->repeat_x,
-					sizeof(__bdesc->repeat_x));
+			bdesc->repeat_x = ((uint16_t)__bdesc->repeat_x[0] << 8)
+				+ __bdesc->repeat_x[1];
 
 			if (__bdesc->block_type_id >= num_block_descs)
 				return -EINVAL;
