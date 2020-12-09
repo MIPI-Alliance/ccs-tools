@@ -122,7 +122,7 @@ sub elem_size(@) {
 	return 1;
 }
 
-open(REGS, "<:utf8", "ccs-regs.txt") or die "cannot open ccs-regs.txt";
+open(REGS, "<:utf8", "ccs-regs.asc") or die "cannot open ccs-regs.asc";
 while (<REGS>) {
 	my ($line) = shrink($_);
 

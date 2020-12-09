@@ -36,13 +36,13 @@ ccs-bin-to-yaml.c
 	Also a C program that converts binary CCS static data into
 	YAML-based format.
 
-ccs-regs.txt
+ccs-regs.asc
 
 	Definitions of CCS standard registers.
 
 mk-regs, mk-licenses
 
-	Scripts for producing C header and source code files from ccs-regs.txt
+	Scripts for producing C header and source code files from ccs-regs.asc
 	and files in "licenses" directory. The script also produces a C array
 	and header for reading the limit and capability information in drivers.
 

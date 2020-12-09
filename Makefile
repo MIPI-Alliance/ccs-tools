@@ -5,7 +5,7 @@ CFLAGS += -Wall -fstack-protector-all -fno-dse \
 
 all: ccs-bin-to-yaml
 
-ccs-regs.h ccs-regs.c ccs-limits.h ccs-limits.c: ccs-regs.txt mk-regs
+ccs-regs.h ccs-regs.c ccs-limits.h ccs-limits.c: ccs-regs.asc mk-regs
 	./mk-regs -r ccs-regs.c -e ccs-regs.h -l ccs-limits.c -L ccs-limits.h
 
 ccs-licenses.c: licenses/* mk-licenses

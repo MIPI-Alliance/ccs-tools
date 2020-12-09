@@ -113,7 +113,7 @@ bit names and or operator (|) as follows:
 	<register name>			<bit name | ...>
 	<register address>		<bit name | ...>
 
-The register and field names can be found in ccs-regs.txt file. The name
+The register and field names can be found in ccs-regs.asc file. The name
 used in the file may differ from the name used in the CCS specification.
 This is the case for especially long names. Lower case is preferred.
 
@@ -172,7 +172,7 @@ mapping is not relevant.
 
 		The default mask of 0xff is used in case the mask is omitted.
 
-		Refer to ccs-regs.txt for the register names.
+		Refer to ccs-regs.asc for the register names.
 
 	read-only-regs
 	manufacturer-regs
