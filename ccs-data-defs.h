@@ -14,6 +14,7 @@ enum __ccs_data_length_specifier_id {
 	CCS_DATA_LENGTH_SPECIFIER_2 = 1,
 	CCS_DATA_LENGTH_SPECIFIER_3 = 2
 };
+
 #define CCS_DATA_LENGTH_SPECIFIER_SIZE_SHIFT	6
 
 struct __ccs_data_length_specifier {
@@ -76,6 +77,7 @@ struct __ccs_data_block_regs {
 #define CCS_DATA_BLOCK_REGS_LEN_SHIFT		3
 #define CCS_DATA_BLOCK_REGS_LEN_MASK		0x38
 #define CCS_DATA_BLOCK_REGS_SEL_SHIFT		6
+
 enum ccs_data_block_regs_sel {
 	CCS_DATA_BLOCK_REGS_SEL_REGS = 0,
 	CCS_DATA_BLOCK_REGS_SEL_REGS2 = 1,
@@ -158,7 +160,7 @@ struct __ccs_data_block_rule_if {
 	uint8_t mask;
 } __attribute__((packed));
 
-enum __ccs_data_block_pdaf_readout_order{
+enum __ccs_data_block_pdaf_readout_order {
 	CCS_DATA_BLOCK_PDAF_READOUT_ORDER_ORIGINAL = 1,
 	CCS_DATA_BLOCK_PDAF_READOUT_ORDER_SEPARATE_WITHIN_LINE = 2,
 	CCS_DATA_BLOCK_PDAF_READOUT_ORDER_SEPARATE_TYPES_SEPARATE_LINES = 3,
