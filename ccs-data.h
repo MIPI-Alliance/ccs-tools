@@ -129,7 +129,7 @@ struct ccs_pdaf_pix_loc_block_desc_group {
 };
 
 /**
- * struct ccs_pdaf_pix_loc_block_desc - PDAF pixel location block descriptor
+ * struct ccs_pdaf_pix_loc_pixel_desc - PDAF pixel location pixel descriptor
  * @pixel_type: Type of the pixel; CCS_DATA_PDAF_PIXEL_TYPE_*
  * @small_offset_x: offset X coordinate
  * @small_offset_y: offset Y coordinate
