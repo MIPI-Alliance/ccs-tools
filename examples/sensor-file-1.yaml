@@ -29,10 +29,10 @@ sensor-read-only-regs:
   - temp_sensor_capability		supported | ccs_format
   - dphy_calibration_capability		manual | alternate_seq
   - frame_format_model_type		2-byte
-  - frame_fmt_desc(0).pixels		1024
-  - frame_fmt_desc(0).pcode		visible_pixel
-  - frame_fmt_desc(7).pixels		128
-  - frame_fmt_desc(7).pcode		dummy_pixel
+  - frame_format_descriptor(0).pixels	1024
+  - frame_format_descriptor(0).pcode	visible_pixel
+  - frame_format_descriptor(7).pixels	128
+  - frame_format_descriptor(7).pcode	dummy_pixel
   - timing_mode_capability		auto_frame_length | rolling_shutter_manual_readout | delayed_exposure_start
 
 sorted-sensor-manufacturer-regs:
