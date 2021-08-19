@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 oneTimeSetUp() {
-	tmpfile=$(tempfile) || assertTrue false
-	tmpfile2=$(tempfile) || assertTrue false
+	tmpfile=$(mktemp) || assertTrue false
+	tmpfile2=$(mktemp) || assertTrue false
 }
 
 testSensorBin() {

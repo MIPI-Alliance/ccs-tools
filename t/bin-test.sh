@@ -5,9 +5,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 oneTimeSetUp() {
-	tmpfile=$(tempfile) || assertTrue false
-	tmpfile2=$(tempfile) || assertTrue false
-	tmpfile3=$(tempfile) || assertTrue false
+	tmpfile=$(mktemp) || assertTrue false
+	tmpfile2=$(mktemp) || assertTrue false
+	tmpfile3=$(mktemp) || assertTrue false
 	EINVAL=$(perl -e 'use POSIX; print EINVAL')
 	ENODATA=$(perl -e 'use POSIX; print ENODATA')
 	ENOENT=$(perl -e 'use POSIX; print ENOENT')
@@ -29,7 +29,7 @@ runCmd() {
 		return 0;
 	elif [ $r ]; then
 		r=$?
-		local t=$(tempfile)
+		local t=$(mktemp)
 		cp $tmpfile $t
 		assertTrue "$cmd $t" $SHUNIT_TRUE
 		return 0
@@ -42,7 +42,7 @@ runCmd() {
 		r=$?
 		assertFalse "$cmd rval $r" $r
 		if [ ! $r ]; then
-			local t=$(tempfile)
+			local t=$(mktemp)
 			cp $tmpfile2 $t
 		fi
 	else
