@@ -19,7 +19,7 @@ runCmd() {
 	local cmd=$3
 	local r
 
-	$cmd
+	$cmd > /dev/null 2>&1
 
 	r=$?
 	if [ $r == 99 ]; then
