@@ -79,6 +79,8 @@ testBin() {
 			done
 		done
 	done
+
+	return 0
 }
 
 oneTimeTearDown() {
